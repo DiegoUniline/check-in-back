@@ -58,16 +58,23 @@ router.get('/checkouts-hoy', async (req, res) => {
   }
 });
 
-// GET one
+// GET one - CORREGIDO: ORDER BY created_at en lugar de fecha
 router.get('/:id', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM v_reservas_detalle WHERE id = ?', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'No encontrado' });
     
     // Traer pagos
-    const [pagos] = await pool.query('SELECT * FROM pagos WHERE reserva_id = ? ORDER BY fecha', [req.params.id]);
+    const [pagos] = await pool.query(
+      'SELECT * FROM pagos WHERE reserva_id = ? ORDER BY created_at DESC', 
+      [req.params.id]
+    );
+    
     // Traer cargos
-    const [cargos] = await pool.query('SELECT * FROM cargos_habitacion WHERE reserva_id = ? ORDER BY fecha', [req.params.id]);
+    const [cargos] = await pool.query(
+      'SELECT ch.*, p.nombre as producto_nombre FROM cargos_habitacion ch LEFT JOIN productos p ON ch.producto_id = p.id WHERE ch.reserva_id = ? ORDER BY ch.created_at DESC', 
+      [req.params.id]
+    );
     
     res.json({ ...rows[0], pagos, cargos });
   } catch (error) {
