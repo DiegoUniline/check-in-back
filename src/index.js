@@ -35,6 +35,7 @@ app.use('/api/usuarios', require('./routes/usuarios'));
 app.use('/api/ventas', require('./routes/ventas'));
 app.use('/api/cargos-habitacion', require('./routes/cargosHabitacion'));
 
+
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date() });
