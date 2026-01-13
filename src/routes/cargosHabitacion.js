@@ -6,7 +6,10 @@ const { v4: uuidv4 } = require('uuid');
 router.get('/reserva/:reserva_id', async (req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT * FROM cargos_habitacion WHERE reserva_id = ? ORDER BY created_at DESC`,
+      `SELECT ch.*, p.nombre as producto_nombre 
+       FROM cargos_habitacion ch 
+       LEFT JOIN productos p ON ch.producto_id = p.id
+       WHERE ch.reserva_id = ? ORDER BY ch.created_at DESC`,
       [req.params.reserva_id]
     );
     res.json(rows);
@@ -15,43 +18,124 @@ router.get('/reserva/:reserva_id', async (req, res) => {
   }
 });
 
-// POST cargo
-router.post('/', async (req, res) => {
+// GET reserva activa por habitación
+router.get('/habitacion/:habitacion_id/reserva-activa', async (req, res) => {
   try {
-    const { reserva_id, producto_id, concepto, cantidad, precio_unitario, subtotal, impuesto, total, notas } = req.body;
-    const id = uuidv4();
-    
-    await pool.query(
-      `INSERT INTO cargos_habitacion (id, reserva_id, producto_id, concepto, cantidad, precio_unitario, subtotal, impuesto, total, notas) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, reserva_id, producto_id || null, concepto || 'Cargo', cantidad || 1, precio_unitario || 0, subtotal || 0, impuesto || 0, total || 0, notas || null]
+    const [rows] = await pool.query(
+      `SELECT r.id, r.numero_reserva, r.cliente_id, c.nombre as cliente_nombre, c.apellido_paterno
+       FROM reservas r 
+       LEFT JOIN clientes c ON r.cliente_id = c.id
+       WHERE r.habitacion_id = ? AND r.estado = 'CheckIn'
+       LIMIT 1`,
+      [req.params.habitacion_id]
     );
     
-    res.status(201).json({ id, ...req.body });
+    if (!rows.length) {
+      return res.status(404).json({ error: 'No hay reserva activa en esta habitación' });
+    }
+    
+    res.json(rows[0]);
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST cargo - acepta reserva_id O habitacion_id
+router.post('/', async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    
+    let { reserva_id, habitacion_id, producto_id, concepto, cantidad, precio_unitario, subtotal, impuesto, total, notas } = req.body;
+    
+    // Si no viene reserva_id pero sí habitacion_id, buscar la reserva activa
+    if (!reserva_id && habitacion_id) {
+      const [reservaActiva] = await conn.query(
+        `SELECT id FROM reservas WHERE habitacion_id = ? AND estado = 'CheckIn' LIMIT 1`,
+        [habitacion_id]
+      );
+      
+      if (!reservaActiva.length) {
+        await conn.rollback();
+        return res.status(400).json({ error: 'No hay reserva activa en esta habitación' });
+      }
+      
+      reserva_id = reservaActiva[0].id;
+    }
+    
+    if (!reserva_id) {
+      await conn.rollback();
+      return res.status(400).json({ error: 'Se requiere reserva_id o habitacion_id' });
+    }
+    
+    const id = uuidv4();
+    
+    // Calcular valores si no vienen
+    const cant = cantidad || 1;
+    const precio = precio_unitario || 0;
+    const sub = subtotal || (cant * precio);
+    const imp = impuesto || (sub * 0.16);
+    const tot = total || (sub + imp);
+    
+    await conn.query(
+      `INSERT INTO cargos_habitacion (id, reserva_id, producto_id, concepto, cantidad, precio_unitario, subtotal, impuesto, total, notas) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, reserva_id, producto_id || null, concepto || 'Cargo POS', cant, precio, sub, imp, tot, notas || null]
+    );
+    
+    // Actualizar saldo de la reserva
+    await conn.query(
+      `UPDATE reservas SET total = total + ?, saldo_pendiente = saldo_pendiente + ? WHERE id = ?`,
+      [tot, tot, reserva_id]
+    );
+    
+    // Descontar stock si es producto
+    if (producto_id) {
+      const [prod] = await conn.query('SELECT stock_actual FROM productos WHERE id = ?', [producto_id]);
+      if (prod.length && prod[0].stock_actual >= cant) {
+        await conn.query('UPDATE productos SET stock_actual = stock_actual - ? WHERE id = ?', [cant, producto_id]);
+      }
+    }
+    
+    await conn.commit();
+    res.status(201).json({ id, reserva_id, total: tot });
+  } catch (error) {
+    await conn.rollback();
     console.error('Error cargo:', error);
     res.status(500).json({ error: error.message });
+  } finally {
+    conn.release();
+  }
+});
+
+// DELETE cargo
+router.delete('/:id', async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    
+    const [cargo] = await conn.query('SELECT * FROM cargos_habitacion WHERE id = ?', [req.params.id]);
+    if (!cargo.length) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'No encontrado' });
+    }
+    
+    // Revertir saldo de reserva
+    await conn.query(
+      `UPDATE reservas SET total = total - ?, saldo_pendiente = saldo_pendiente - ? WHERE id = ?`,
+      [cargo[0].total, cargo[0].total, cargo[0].reserva_id]
+    );
+    
+    await conn.query('DELETE FROM cargos_habitacion WHERE id = ?', [req.params.id]);
+    
+    await conn.commit();
+    res.json({ success: true });
+  } catch (error) {
+    await conn.rollback();
+    res.status(500).json({ error: error.message });
+  } finally {
+    conn.release();
   }
 });
 
 module.exports = router;
-// POST cargo - SIN habitacion_id ya que la tabla no tiene esa columna
-router.post('/', async (req, res) => {
-  try {
-    const { reserva_id, producto_id, concepto, cantidad, precio_unitario, subtotal, impuesto, total, notas } = req.body;
-    const id = uuidv4();
-    
-    // Tu tabla tiene: id, reserva_id, producto_id, concepto, cantidad, precio_unitario, subtotal, impuesto, total, notas
-    await pool.query(
-      `INSERT INTO cargos_habitacion (id, reserva_id, producto_id, concepto, cantidad, precio_unitario, subtotal, impuesto, total, notas) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, reserva_id, producto_id || null, concepto || 'Cargo POS', cantidad || 1, precio_unitario || 0, subtotal || 0, impuesto || 0, total || 0, notas || null]
-    );
-    
-    res.status(201).json({ id, ...req.body });
-  } catch (error) {
-    console.error('Error cargo:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
