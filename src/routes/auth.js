@@ -75,3 +75,22 @@ router.get('/setup', async (req, res) => {
 });
 
 module.exports = router;
+// Debug - BORRAR DESPUÉS
+router.get('/debug', async (req, res) => {
+  try {
+    const [users] = await pool.query('SELECT id, email, password_hash, activo FROM usuarios WHERE email = ?', ['diego.leon@uniline.mx']);
+    if (!users.length) {
+      return res.json({ error: 'Usuario no encontrado' });
+    }
+    const user = users[0];
+    const testPassword = await bcrypt.compare('123456', user.password_hash);
+    res.json({ 
+      encontrado: true,
+      activo: user.activo,
+      passwordValido: testPassword,
+      hashGuardado: user.password_hash.substring(0, 20) + '...'
+    });
+  } catch (e) {
+    res.json({ error: e.message });
+  }
+});
