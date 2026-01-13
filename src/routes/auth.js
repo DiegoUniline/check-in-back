@@ -59,4 +59,19 @@ router.post('/register', async (req, res) => {
   }
 });
 
+// Setup admin - BORRAR DESPUÉS
+router.get('/setup', async (req, res) => {
+  try {
+    const hash = await bcrypt.hash('123456', 10);
+    await pool.query('DELETE FROM usuarios WHERE email = ?', ['diego.leon@uniline.mx']);
+    await pool.query(
+      'INSERT INTO usuarios (id, email, password_hash, nombre, rol, activo) VALUES (?, ?, ?, ?, ?, ?)',
+      [uuidv4(), 'diego.leon@uniline.mx', hash, 'Diego León', 'Admin', true]
+    );
+    res.json({ ok: true, message: 'Usuario creado' });
+  } catch (e) {
+    res.json({ error: e.message });
+  }
+});
+
 module.exports = router;
