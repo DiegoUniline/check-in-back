@@ -60,7 +60,6 @@ router.post('/', async (req, res) => {
       [id, proveedor_id, fecha || new Date(), folio_factura, subtotal, impuestos, total, notas]
     );
     
-    // Insertar detalle y actualizar stock
     if (detalle && detalle.length > 0) {
       for (const item of detalle) {
         await conn.query(
@@ -68,7 +67,6 @@ router.post('/', async (req, res) => {
           [uuidv4(), id, item.producto_id, item.cantidad, item.precio_unitario, item.cantidad * item.precio_unitario]
         );
         
-        // Actualizar stock del producto
         const [prod] = await conn.query('SELECT stock_actual FROM productos WHERE id = ?', [item.producto_id]);
         if (prod.length) {
           const stockAnterior = prod[0].stock_actual;
