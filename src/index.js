@@ -4,7 +4,6 @@ const cors = require('cors');
 const helmet = require('helmet');
 const compression = require('compression');
 const pool = require('./config/database');
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -30,6 +29,8 @@ app.use('/api/mantenimiento', require('./routes/mantenimiento'));
 app.use('/api/productos', require('./routes/productos'));
 app.use('/api/gastos', require('./routes/gastos'));
 app.use('/api/dashboard', require('./routes/dashboard'));
+app.use('/api/proveedores', require('./routes/proveedores'));
+app.use('/api/compras', require('./routes/compras'));
 
 // Health check
 app.get('/api/health', (req, res) => {
