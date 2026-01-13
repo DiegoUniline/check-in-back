@@ -1,49 +1,82 @@
-const express = require('express');
-const router = express.Router();
-const pool = require('../db');
+const router = require('express').Router();
+const pool = require('../config/database');
+const { v4: uuidv4 } = require('uuid');
 
-// Función simple para generar ID
-function generateId() {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-    const r = Math.random() * 16 | 0;
-    const v = c === 'x' ? r : (r & 0x3 | 0x8);
-    return v.toString(16);
-  });
-}
-
-// GET todas las ventas
+// GET todas
 router.get('/', async (req, res) => {
   try {
-    const [ventas] = await pool.query('SELECT * FROM ventas ORDER BY created_at DESC');
-    res.json(ventas);
+    const [rows] = await pool.query('SELECT * FROM ventas ORDER BY created_at DESC');
+    res.json(rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// POST nueva venta
-router.post('/', async (req, res) => {
+// GET una con detalle
+router.get('/:id', async (req, res) => {
   try {
-    const { folio, subtotal, impuestos, total, metodo_pago, reserva_id, detalle } = req.body;
-    const ventaId = generateId();
+    const [venta] = await pool.query('SELECT * FROM ventas WHERE id = ?', [req.params.id]);
+    if (!venta.length) return res.status(404).json({ error: 'No encontrado' });
     
-    await pool.query(
-      'INSERT INTO ventas (id, folio, subtotal, impuestos, total, metodo_pago, reserva_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [ventaId, folio, subtotal || 0, impuestos || 0, total || 0, metodo_pago || 'Efectivo', reserva_id || null]
+    const [detalle] = await pool.query(
+      `SELECT vd.*, p.nombre as producto_nombre FROM ventas_detalle vd LEFT JOIN productos p ON vd.producto_id = p.id WHERE vd.venta_id = ?`,
+      [req.params.id]
+    );
+    
+    res.json({ ...venta[0], detalle });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST venta
+router.post('/', async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    
+    const { usuario_id, cliente_id, reserva_id, subtotal, impuestos, total, metodo_pago, detalle } = req.body;
+    const id = uuidv4();
+    const folio = `V-${Date.now()}`;
+    
+    await conn.query(
+      `INSERT INTO ventas (id, folio, usuario_id, cliente_id, reserva_id, subtotal, impuestos, total, metodo_pago) VALUES (?,?,?,?,?,?,?,?,?)`,
+      [id, folio, usuario_id || null, cliente_id || null, reserva_id || null, subtotal || 0, impuestos || 0, total || 0, metodo_pago || 'Efectivo']
     );
     
     if (detalle && detalle.length > 0) {
       for (const item of detalle) {
-        await pool.query(
-          'INSERT INTO ventas_detalle (id, venta_id, producto_id, cantidad, precio_unitario, subtotal) VALUES (?, ?, ?, ?, ?, ?)',
-          [generateId(), ventaId, item.producto_id, item.cantidad, item.precio_unitario, item.subtotal]
+        await conn.query(
+          `INSERT INTO ventas_detalle (id, venta_id, producto_id, cantidad, precio_unitario, subtotal) VALUES (?,?,?,?,?,?)`,
+          [uuidv4(), id, item.producto_id, item.cantidad, item.precio_unitario, item.cantidad * item.precio_unitario]
         );
+        
+        // Descontar stock
+        const [prod] = await conn.query('SELECT stock_actual FROM productos WHERE id = ?', [item.producto_id]);
+        if (prod.length && prod[0].stock_actual >= item.cantidad) {
+          const stockNuevo = prod[0].stock_actual - item.cantidad;
+          await conn.query('UPDATE productos SET stock_actual = ? WHERE id = ?', [stockNuevo, item.producto_id]);
+        }
       }
     }
     
-    res.status(201).json({ id: ventaId });
+    await conn.commit();
+    res.status(201).json({ id, folio });
   } catch (error) {
-    console.error('Error:', error);
+    await conn.rollback();
+    res.status(500).json({ error: error.message });
+  } finally {
+    conn.release();
+  }
+});
+
+// DELETE
+router.delete('/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM ventas_detalle WHERE venta_id = ?', [req.params.id]);
+    await pool.query('DELETE FROM ventas WHERE id = ?', [req.params.id]);
+    res.json({ success: true });
+  } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
