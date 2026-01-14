@@ -33,10 +33,9 @@ app.use('/api/proveedores', require('./routes/proveedores'));
 app.use('/api/compras', require('./routes/compras'));
 app.use('/api/usuarios', require('./routes/usuarios'));
 app.use('/api/ventas', require('./routes/ventas'));
-app.use('/api/cargos-habitacion', require('./routes/cargosHabitacion'));
+app.use('/api/cargos', require('./routes/cargosHabitacion'));
 app.use('/api/conceptos-cargo', require('./routes/conceptos-cargo'));
 app.use('/api/entregables', require('./routes/entregables'));
-app.use('/api/cargos', require('./routes/cargos'));
 
 // Health check
 app.get('/api/health', (req, res) => {
