@@ -58,7 +58,7 @@ router.get('/checkouts-hoy', async (req, res) => {
   }
 });
 
-// GET one - CORREGIDO: ORDER BY created_at en lugar de fecha
+// GET one
 router.get('/:id', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM v_reservas_detalle WHERE id = ?', [req.params.id]);
@@ -153,26 +153,55 @@ router.post('/', async (req, res) => {
   }
 });
 
-// PUT actualizar reserva
+// PUT actualizar reserva (CORREGIDO - soporta actualizaciones parciales)
 router.put('/:id', async (req, res) => {
   try {
-    const { habitacion_id, tipo_habitacion_id, fecha_checkin, fecha_checkout, hora_llegada, adultos, ninos, tarifa_noche, solicitudes_especiales, notas_internas } = req.body;
+    // Obtener reserva actual
+    const [current] = await pool.query('SELECT * FROM reservas WHERE id = ?', [req.params.id]);
+    if (!current.length) {
+      return res.status(404).json({ error: 'Reserva no encontrada' });
+    }
     
+    const reserva = current[0];
+    
+    // Mezclar valores actuales con los nuevos (usa el nuevo si viene, si no usa el actual)
+    const habitacion_id = req.body.habitacion_id ?? reserva.habitacion_id;
+    const tipo_habitacion_id = req.body.tipo_habitacion_id ?? reserva.tipo_habitacion_id;
+    const fecha_checkin = req.body.fecha_checkin ?? reserva.fecha_checkin;
+    const fecha_checkout = req.body.fecha_checkout ?? reserva.fecha_checkout;
+    const hora_llegada = req.body.hora_llegada ?? reserva.hora_llegada;
+    const adultos = req.body.adultos ?? reserva.adultos;
+    const ninos = req.body.ninos ?? reserva.ninos;
+    const tarifa_noche = req.body.tarifa_noche ?? reserva.tarifa_noche;
+    const solicitudes_especiales = req.body.solicitudes_especiales ?? reserva.solicitudes_especiales;
+    const notas_internas = req.body.notas_internas ?? reserva.notas_internas;
+    const estado = req.body.estado ?? reserva.estado;
+    
+    // Recalcular totales
     const checkin = new Date(fecha_checkin);
     const checkout = new Date(fecha_checkout);
-    const noches = Math.ceil((checkout - checkin) / (1000 * 60 * 60 * 24));
-    const subtotal = tarifa_noche * noches;
+    const noches = Math.ceil((checkout - checkin) / (1000 * 60 * 60 * 24)) || 1;
+    const subtotal = (parseFloat(tarifa_noche) || 0) * noches;
     const impuestos = subtotal * 0.16;
     const total = subtotal + impuestos;
-    
-    // Get current paid
-    const [current] = await pool.query('SELECT total_pagado FROM reservas WHERE id = ?', [req.params.id]);
-    const saldo = total - (current[0]?.total_pagado || 0);
+    const saldo = total - (parseFloat(reserva.total_pagado) || 0);
     
     await pool.query(
-      `UPDATE reservas SET habitacion_id=?, tipo_habitacion_id=?, fecha_checkin=?, fecha_checkout=?, hora_llegada=?, adultos=?, ninos=?, noches=?, tarifa_noche=?, subtotal_hospedaje=?, total_impuestos=?, total=?, saldo_pendiente=?, solicitudes_especiales=?, notas_internas=? WHERE id=?`,
-      [habitacion_id, tipo_habitacion_id, fecha_checkin, fecha_checkout, hora_llegada, adultos, ninos, noches, tarifa_noche, subtotal, impuestos, total, saldo, solicitudes_especiales, notas_internas, req.params.id]
+      `UPDATE reservas SET 
+        habitacion_id=?, tipo_habitacion_id=?, fecha_checkin=?, fecha_checkout=?, 
+        hora_llegada=?, adultos=?, ninos=?, noches=?, tarifa_noche=?, 
+        subtotal_hospedaje=?, total_impuestos=?, total=?, saldo_pendiente=?, 
+        solicitudes_especiales=?, notas_internas=?, estado=?
+      WHERE id=?`,
+      [
+        habitacion_id, tipo_habitacion_id, fecha_checkin, fecha_checkout,
+        hora_llegada, adultos, ninos, noches, tarifa_noche,
+        subtotal, impuestos, total, saldo,
+        solicitudes_especiales, notas_internas, estado,
+        req.params.id
+      ]
     );
+    
     res.json({ id: req.params.id, total, noches, saldo_pendiente: saldo });
   } catch (error) {
     res.status(500).json({ error: error.message });
