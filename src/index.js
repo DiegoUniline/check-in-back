@@ -36,6 +36,7 @@ app.use('/api/ventas', require('./routes/ventas'));
 app.use('/api/cargos-habitacion', require('./routes/cargosHabitacion'));
 app.use('/api/conceptos-cargo', require('./routes/conceptos-cargo'));
 app.use('/api/entregables', require('./routes/entregables'));
+app.use('/api/cargos', require('./routes/cargos'));
 
 // Health check
 app.get('/api/health', (req, res) => {
