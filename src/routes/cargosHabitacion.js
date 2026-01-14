@@ -6,9 +6,10 @@ const { v4: uuidv4 } = require('uuid');
 router.get('/reserva/:reserva_id', async (req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT ch.*, p.nombre as producto_nombre 
+      `SELECT ch.*, p.nombre as producto_nombre, cc.nombre as concepto_nombre, cc.categoria
        FROM cargos_habitacion ch 
        LEFT JOIN productos p ON ch.producto_id = p.id
+       LEFT JOIN conceptos_cargo cc ON ch.concepto_id = cc.id
        WHERE ch.reserva_id = ? ORDER BY ch.created_at DESC`,
       [req.params.reserva_id]
     );
@@ -40,13 +41,13 @@ router.get('/habitacion/:habitacion_id/reserva-activa', async (req, res) => {
   }
 });
 
-// POST cargo - acepta reserva_id O habitacion_id
+// POST cargo
 router.post('/', async (req, res) => {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
     
-    let { reserva_id, habitacion_id, producto_id, concepto, cantidad, precio_unitario, subtotal, impuesto, total, notas } = req.body;
+    let { reserva_id, habitacion_id, producto_id, concepto_id, concepto, cantidad, precio_unitario, subtotal, impuesto, total, notas } = req.body;
     
     // Si no viene reserva_id pero sí habitacion_id, buscar la reserva activa
     if (!reserva_id && habitacion_id) {
@@ -70,17 +71,29 @@ router.post('/', async (req, res) => {
     
     const id = uuidv4();
     
-    // Calcular valores si no vienen
-    const cant = cantidad || 1;
-    const precio = precio_unitario || 0;
-    const sub = subtotal || (cant * precio);
-    const imp = impuesto || (sub * 0.16);
-    const tot = total || (sub + imp);
+    // Si viene concepto_id, obtener info del concepto
+    let conceptoNombre = concepto || 'Cargo adicional';
+    let aplicaIva = true;
+    
+    if (concepto_id) {
+      const [conceptoData] = await conn.query('SELECT nombre, aplica_iva FROM conceptos_cargo WHERE id = ?', [concepto_id]);
+      if (conceptoData.length) {
+        conceptoNombre = conceptoData[0].nombre;
+        aplicaIva = conceptoData[0].aplica_iva;
+      }
+    }
+    
+    // Calcular valores
+    const cant = parseFloat(cantidad) || 1;
+    const precio = parseFloat(precio_unitario) || 0;
+    const sub = subtotal ? parseFloat(subtotal) : (cant * precio);
+    const imp = impuesto !== undefined ? parseFloat(impuesto) : (aplicaIva ? sub * 0.16 : 0);
+    const tot = total ? parseFloat(total) : (sub + imp);
     
     await conn.query(
-      `INSERT INTO cargos_habitacion (id, reserva_id, producto_id, concepto, cantidad, precio_unitario, subtotal, impuesto, total, notas) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, reserva_id, producto_id || null, concepto || 'Cargo POS', cant, precio, sub, imp, tot, notas || null]
+      `INSERT INTO cargos_habitacion (id, reserva_id, concepto_id, producto_id, concepto, cantidad, precio_unitario, subtotal, impuesto, total, notas) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, reserva_id, concepto_id || null, producto_id || null, conceptoNombre, cant, precio, sub, imp, tot, notas || null]
     );
     
     // Actualizar saldo de la reserva
@@ -98,7 +111,7 @@ router.post('/', async (req, res) => {
     }
     
     await conn.commit();
-    res.status(201).json({ id, reserva_id, total: tot });
+    res.status(201).json({ id, reserva_id, concepto: conceptoNombre, total: tot });
   } catch (error) {
     await conn.rollback();
     console.error('Error cargo:', error);
@@ -125,6 +138,14 @@ router.delete('/:id', async (req, res) => {
       `UPDATE reservas SET total = total - ?, saldo_pendiente = saldo_pendiente - ? WHERE id = ?`,
       [cargo[0].total, cargo[0].total, cargo[0].reserva_id]
     );
+    
+    // Regresar stock si era producto
+    if (cargo[0].producto_id) {
+      await conn.query(
+        'UPDATE productos SET stock_actual = stock_actual + ? WHERE id = ?', 
+        [cargo[0].cantidad, cargo[0].producto_id]
+      );
+    }
     
     await conn.query('DELETE FROM cargos_habitacion WHERE id = ?', [req.params.id]);
     
