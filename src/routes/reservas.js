@@ -87,10 +87,14 @@ router.post('/', async (req, res) => {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-
-// En POST crear reserva - agregar origen al destructuring
-const { cliente_id, habitacion_id, tipo_habitacion_id, fecha_checkin, fecha_checkout, hora_llegada, adultos, ninos, tarifa_noche, solicitudes_especiales, notas_internas, origen } = req.body;
-   
+    
+    const { 
+      cliente_id, habitacion_id, tipo_habitacion_id, fecha_checkin, fecha_checkout, 
+      hora_llegada, adultos, ninos, personas_extra, cargo_persona_extra,
+      tarifa_noche, solicitudes_especiales, notas_internas, origen,
+      descuento_tipo, descuento_valor
+    } = req.body;
+    
     const id = uuidv4();
     const numero_reserva = await generarNumeroReserva();
     
@@ -98,24 +102,49 @@ const { cliente_id, habitacion_id, tipo_habitacion_id, fecha_checkin, fecha_chec
     const checkin = new Date(fecha_checkin);
     const checkout = new Date(fecha_checkout);
     const noches = Math.ceil((checkout - checkin) / (1000 * 60 * 60 * 24));
-    const subtotal = tarifa_noche * noches;
-    const impuestos = subtotal * 0.16;
-    const total = subtotal + impuestos;
     
-  // En el INSERT agregar el campo
-await conn.query(
-  `INSERT INTO reservas (id, numero_reserva, cliente_id, habitacion_id, tipo_habitacion_id, fecha_checkin, fecha_checkout, hora_llegada, adultos, ninos, noches, tarifa_noche, subtotal_hospedaje, total_impuestos, total, total_pagado, saldo_pendiente, estado, origen, solicitudes_especiales, notas_internas)
-   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?)`,
-  [id, numero_reserva, cliente_id, habitacion_id, tipo_habitacion_id, fecha_checkin, fecha_checkout, hora_llegada, adultos || 1, ninos || 0, noches, tarifa_noche, subtotal, impuestos, total, total, 'Pendiente', origen || 'Reserva', solicitudes_especiales, notas_internas]
-);
+    // Subtotal hospedaje + cargo persona extra
+    const subtotalHospedaje = tarifa_noche * noches;
+    const totalPersonaExtra = (personas_extra || 0) * (cargo_persona_extra || 0) * noches;
+    const subtotal = subtotalHospedaje + totalPersonaExtra;
     
-    // Si tiene habitación asignada, marcarla como reservada
+    // Calcular descuento
+    let descuentoMonto = 0;
+    if (descuento_tipo === 'Monto') {
+      descuentoMonto = descuento_valor || 0;
+    } else if (descuento_tipo === 'Porcentaje') {
+      descuentoMonto = subtotal * ((descuento_valor || 0) / 100);
+    }
+    
+    const subtotalConDescuento = subtotal - descuentoMonto;
+    const impuestos = subtotalConDescuento * 0.16;
+    const total = subtotalConDescuento + impuestos;
+    
+    await conn.query(
+      `INSERT INTO reservas (
+        id, numero_reserva, cliente_id, habitacion_id, tipo_habitacion_id, 
+        fecha_checkin, fecha_checkout, hora_llegada, adultos, ninos, personas_extra, cargo_persona_extra,
+        noches, tarifa_noche, subtotal_hospedaje, 
+        descuento_tipo, descuento_valor, descuento_monto,
+        total_impuestos, total, total_pagado, saldo_pendiente, 
+        estado, origen, solicitudes_especiales, notas_internas
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?)`,
+      [
+        id, numero_reserva, cliente_id, habitacion_id, tipo_habitacion_id,
+        fecha_checkin, fecha_checkout, hora_llegada, adultos || 1, ninos || 0, personas_extra || 0, cargo_persona_extra || 0,
+        noches, tarifa_noche, subtotalHospedaje,
+        descuento_tipo || null, descuento_valor || 0, descuentoMonto,
+        impuestos, total, total,
+        'Pendiente', origen || 'Reserva', solicitudes_especiales, notas_internas
+      ]
+    );
+    
     if (habitacion_id) {
       await conn.query("UPDATE habitaciones SET estado_habitacion = 'Reservada' WHERE id = ?", [habitacion_id]);
     }
     
     await conn.commit();
-    res.status(201).json({ id, numero_reserva, total, noches });
+    res.status(201).json({ id, numero_reserva, total, noches, descuento: descuentoMonto });
   } catch (error) {
     await conn.rollback();
     res.status(500).json({ error: error.message });
