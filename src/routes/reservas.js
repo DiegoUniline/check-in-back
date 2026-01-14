@@ -87,9 +87,10 @@ router.post('/', async (req, res) => {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    
-    const { cliente_id, habitacion_id, tipo_habitacion_id, fecha_checkin, fecha_checkout, hora_llegada, adultos, ninos, tarifa_noche, solicitudes_especiales, notas_internas } = req.body;
-    
+
+// En POST crear reserva - agregar origen al destructuring
+const { cliente_id, habitacion_id, tipo_habitacion_id, fecha_checkin, fecha_checkout, hora_llegada, adultos, ninos, tarifa_noche, solicitudes_especiales, notas_internas, origen } = req.body;
+   
     const id = uuidv4();
     const numero_reserva = await generarNumeroReserva();
     
@@ -101,11 +102,12 @@ router.post('/', async (req, res) => {
     const impuestos = subtotal * 0.16;
     const total = subtotal + impuestos;
     
-    await conn.query(
-      `INSERT INTO reservas (id, numero_reserva, cliente_id, habitacion_id, tipo_habitacion_id, fecha_checkin, fecha_checkout, hora_llegada, adultos, ninos, noches, tarifa_noche, subtotal_hospedaje, total_impuestos, total, total_pagado, saldo_pendiente, estado, solicitudes_especiales, notas_internas)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?)`,
-      [id, numero_reserva, cliente_id, habitacion_id, tipo_habitacion_id, fecha_checkin, fecha_checkout, hora_llegada, adultos || 1, ninos || 0, noches, tarifa_noche, subtotal, impuestos, total, total, 'Pendiente', solicitudes_especiales, notas_internas]
-    );
+  // En el INSERT agregar el campo
+await conn.query(
+  `INSERT INTO reservas (id, numero_reserva, cliente_id, habitacion_id, tipo_habitacion_id, fecha_checkin, fecha_checkout, hora_llegada, adultos, ninos, noches, tarifa_noche, subtotal_hospedaje, total_impuestos, total, total_pagado, saldo_pendiente, estado, origen, solicitudes_especiales, notas_internas)
+   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?)`,
+  [id, numero_reserva, cliente_id, habitacion_id, tipo_habitacion_id, fecha_checkin, fecha_checkout, hora_llegada, adultos || 1, ninos || 0, noches, tarifa_noche, subtotal, impuestos, total, total, 'Pendiente', origen || 'Reserva', solicitudes_especiales, notas_internas]
+);
     
     // Si tiene habitación asignada, marcarla como reservada
     if (habitacion_id) {
