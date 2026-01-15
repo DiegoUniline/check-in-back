@@ -1,91 +1,102 @@
 const router = require('express').Router();
 const pool = require('../config/database');
-const crypto = require('crypto'); 
+const crypto = require('crypto');
 
-// Generador de ID para Heroku (sin librerías externas)
 const generateId = () => crypto.randomUUID();
 
 // -----------------------------------------------------------
-// 1. CUENTAS (Basado en tu DESCRIBE: razon_social, email_acceso...)
+// 1. CUENTAS (Búsqueda y Filtro)
 // -----------------------------------------------------------
 router.get('/cuentas', async (req, res) => {
-  try {
-    const [rows] = await pool.query('SELECT * FROM cuentas ORDER BY razon_social ASC');
-    res.json(rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+    try {
+        const { busqueda } = req.query;
+        let query = 'SELECT * FROM cuentas';
+        const params = [];
 
-router.post('/cuentas', async (req, res) => {
-  try {
-    const { razon_social, nombre_administrador, email_acceso, password, telefono } = req.body;
-    const id = generateId();
-    await pool.query(
-      'INSERT INTO cuentas (id, razon_social, nombre_administrador, email_acceso, password, telefono, activo) VALUES (?, ?, ?, ?, ?, ?, 1)',
-      [id, razon_social, nombre_administrador, email_acceso, password, telefono]
-    );
-    res.status(201).json({ id, razon_social });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+        if (busqueda) {
+            query += ' WHERE razon_social LIKE ? OR nombre_administrador LIKE ?';
+            params.push(`%${busqueda}%`, `%${busqueda}%`);
+        }
+        
+        query += ' ORDER BY created_at DESC';
+        const [rows] = await pool.query(query, params);
+        res.json(rows);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 // -----------------------------------------------------------
-// 2. PLANES
+// 2. PLANES (Ver y Editar)
 // -----------------------------------------------------------
 router.get('/planes', async (req, res) => {
-  try {
-    const [rows] = await pool.query('SELECT * FROM planes');
-    res.json(rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+    try {
+        const [rows] = await pool.query('SELECT * FROM planes ORDER BY precio ASC');
+        res.json(rows);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+router.put('/planes/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { nombre, descripcion, precio, meses, limite_habitaciones, activo } = req.body;
+        await pool.query(
+            'UPDATE planes SET nombre=?, descripcion=?, precio=?, meses=?, limite_habitaciones=?, activo=? WHERE id=?',
+            [nombre, descripcion, precio, meses, limite_habitaciones, activo, id]
+        );
+        res.json({ message: "Plan actualizado" });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 // -----------------------------------------------------------
-// 3. SUSCRIPCIONES (Basado en tu DESCRIBE: fecha_fin, cuenta_id...)
+// 3. SUSCRIPCIONES (Cálculo de días y Filtros)
 // -----------------------------------------------------------
 router.get('/suscripciones', async (req, res) => {
-  try {
-    const [rows] = await pool.query(`
-      SELECT s.*, c.razon_social, p.nombre as plan_nombre 
-      FROM suscripciones s
-      JOIN cuentas c ON s.cuenta_id = c.id
-      JOIN planes p ON s.plan_id = p.id
-      ORDER BY s.fecha_fin DESC
-    `);
-    res.json(rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+    try {
+        const { cuenta_id } = req.query;
+        let sql = `
+            SELECT 
+                s.*, 
+                s.fecha_fin as fecha_vencimiento, -- Alias para que el Front no de "Invalid Date"
+                c.razon_social, 
+                p.nombre as plan_nombre,
+                DATEDIFF(s.fecha_fin, NOW()) as dias_restantes
+            FROM suscripciones s
+            JOIN cuentas c ON s.cuenta_id = c.id
+            JOIN planes p ON s.plan_id = p.id
+        `;
+        const params = [];
+
+        if (cuenta_id) {
+            sql += ' WHERE s.cuenta_id = ?';
+            params.push(cuenta_id);
+        }
+
+        sql += ' ORDER BY s.fecha_fin ASC';
+        const [rows] = await pool.query(sql, params);
+        res.json(rows);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
-router.post('/suscripciones', async (req, res) => {
-  try {
-    const { cuenta_id, plan_id, fecha_inicio, fecha_fin } = req.body;
-    const id = generateId();
-    await pool.query(
-      'INSERT INTO suscripciones (id, cuenta_id, plan_id, fecha_inicio, fecha_fin, estado) VALUES (?, ?, ?, ?, ?, ?)',
-      [id, cuenta_id, plan_id, fecha_inicio, fecha_fin, 'activa']
-    );
-    res.status(201).json({ id, status: 'activa' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// -----------------------------------------------------------
-// 4. ASIGNACIÓN DE HOTEL
-// -----------------------------------------------------------
-router.patch('/asignar-hotel', async (req, res) => {
-  try {
-    const { cuenta_id, hotel_id } = req.body;
-    await pool.query('UPDATE hotel SET cuenta_id = ? WHERE id = ?', [cuenta_id, hotel_id]);
-    res.json({ success: true, message: 'Hotel vinculado' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+// Editar suscripción (para renovar o cambiar fechas)
+router.put('/suscripciones/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { plan_id, fecha_inicio, fecha_fin, estado } = req.body;
+        await pool.query(
+            'UPDATE suscripciones SET plan_id=?, fecha_inicio=?, fecha_fin=?, estado=? WHERE id=?',
+            [plan_id, fecha_inicio, fecha_fin, estado, id]
+        );
+        res.json({ message: "Suscripción actualizada" });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 module.exports = router;
