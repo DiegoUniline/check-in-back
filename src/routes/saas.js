@@ -98,5 +98,31 @@ router.put('/suscripciones/:id', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+// LISTAR HOTELES CON SU DUEÑO (CUENTA)
+router.get('/hoteles-asignados', async (req, res) => {
+    try {
+        const [rows] = await pool.query(`
+            SELECT 
+                h.id, 
+                h.nombre as hotel_nombre, 
+                c.razon_social as dueño,
+                c.id as cuenta_id,
+                p.nombre as plan_actual,
+                s.fecha_fin
+            FROM hotel h
+            LEFT JOIN cuentas c ON h.cuenta_id = c.id
+            LEFT JOIN suscripciones s ON c.id = s.cuenta_id
+            LEFT JOIN planes p ON s.plan_id = p.id
+            WHERE s.estado = 'activa' OR s.estado IS NULL
+        `);
+        res.json(rows);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+
+
+
 
 module.exports = router;
