@@ -1,36 +1,47 @@
 const router = require('express').Router();
 const pool = require('../config/database');
-const crypto = require('crypto'); // NO requiere instalación, ya viene en Node.js
+const crypto = require('crypto'); 
 
-// Función para generar IDs (reemplaza a uuidv4)
+// Función para generar IDs compatibles con tu columna varchar(36)
 const generateId = () => crypto.randomUUID();
 
-// 1. CUENTAS
+// -----------------------------------------------------------
+// 1. CUENTAS (Empresas/Dueños)
+// -----------------------------------------------------------
+
+// GET todas las cuentas (Ajustado a tus columnas reales)
 router.get('/cuentas', async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT * FROM cuentas ORDER BY nombre_propietario ASC');
+    const [rows] = await pool.query('SELECT id, razon_social, nombre_administrador, email_acceso, telefono, activo, created_at FROM cuentas ORDER BY razon_social ASC');
     res.json(rows);
   } catch (error) {
-    console.error("Error en cuentas:", error);
+    console.error("Error en GET /cuentas:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
+// POST crear cuenta (Ajustado a tus columnas reales)
 router.post('/cuentas', async (req, res) => {
   try {
-    const { nombre_propietario, email_contacto, telefono, rfc } = req.body;
+    const { razon_social, nombre_administrador, email_acceso, password, telefono } = req.body;
     const id = generateId();
+    
     await pool.query(
-      'INSERT INTO cuentas (id, nombre_propietario, email_contacto, telefono, rfc) VALUES (?, ?, ?, ?, ?)',
-      [id, nombre_propietario, email_contacto, telefono, rfc]
+      'INSERT INTO cuentas (id, razon_social, nombre_administrador, email_acceso, password, telefono, activo) VALUES (?, ?, ?, ?, ?, ?, 1)',
+      [id, razon_social, nombre_administrador, email_acceso, password, telefono]
     );
-    res.status(201).json({ id, nombre_propietario });
+    
+    res.status(201).json({ id, razon_social, message: "Cuenta creada correctamente" });
   } catch (error) {
+    console.error("Error en POST /cuentas:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
+// -----------------------------------------------------------
 // 2. PLANES
+// -----------------------------------------------------------
+
 router.get('/planes', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM planes WHERE activo = 1 ORDER BY precio ASC');
@@ -54,11 +65,14 @@ router.post('/planes', async (req, res) => {
   }
 });
 
+// -----------------------------------------------------------
 // 3. SUSCRIPCIONES
+// -----------------------------------------------------------
+
 router.get('/suscripciones', async (req, res) => {
   try {
     const [rows] = await pool.query(`
-      SELECT s.*, c.nombre_propietario, p.nombre as plan_nombre 
+      SELECT s.*, c.razon_social, p.nombre as plan_nombre 
       FROM suscripciones s
       JOIN cuentas c ON s.cuenta_id = c.id
       JOIN planes p ON s.plan_id = p.id
@@ -66,6 +80,7 @@ router.get('/suscripciones', async (req, res) => {
     `);
     res.json(rows);
   } catch (error) {
+    console.error("Error en GET /suscripciones:", error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -79,6 +94,23 @@ router.post('/suscripciones', async (req, res) => {
       [id, cuenta_id, plan_id, fecha_inicio, fecha_vencimiento, 'activa']
     );
     res.status(201).json({ id, status: 'activa' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// -----------------------------------------------------------
+// 4. ASIGNACIÓN DE HOTELES
+// -----------------------------------------------------------
+
+router.patch('/asignar-hotel', async (req, res) => {
+  try {
+    const { cuenta_id, hotel_id } = req.body;
+    await pool.query(
+      'UPDATE hotel SET cuenta_id = ? WHERE id = ?',
+      [cuenta_id, hotel_id]
+    );
+    res.json({ success: true, message: 'Hotel vinculado a la cuenta empresarial' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
