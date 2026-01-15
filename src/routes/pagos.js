@@ -1,13 +1,16 @@
 const router = require('express').Router();
 const pool = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
+const checkSubscription = require('../middleware/checkSubscription');
+
+router.use(checkSubscription);
 
 // Generar número de pago
-const generarNumeroPago = async () => {
+const generarNumeroPago = async (hotel_id) => {
   const year = new Date().getFullYear();
   const [rows] = await pool.query(
-    "SELECT COUNT(*) as count FROM pagos WHERE numero_pago LIKE ?",
-    [`PAG-${year}-%`]
+    "SELECT COUNT(*) as count FROM pagos WHERE hotel_id = ? AND numero_pago LIKE ?",
+    [hotel_id, `PAG-${year}-%`]
   );
   const num = (rows[0].count + 1).toString().padStart(5, '0');
   return `PAG-${year}-${num}`;
@@ -17,8 +20,11 @@ const generarNumeroPago = async () => {
 router.get('/reserva/:reservaId', async (req, res) => {
   try {
     const [rows] = await pool.query(
-      'SELECT * FROM pagos WHERE reserva_id = ? ORDER BY fecha DESC',
-      [req.params.reservaId]
+      `SELECT p.* FROM pagos p
+       JOIN reservas r ON p.reserva_id = r.id
+       WHERE p.reserva_id = ? AND r.hotel_id = ?
+       ORDER BY p.fecha DESC`,
+      [req.params.reservaId, req.hotel_id]
     );
     res.json(rows);
   } catch (error) {
@@ -35,9 +41,9 @@ router.get('/', async (req, res) => {
       FROM pagos p
       JOIN reservas r ON p.reserva_id = r.id
       JOIN clientes c ON r.cliente_id = c.id
-      WHERE 1=1
+      WHERE p.hotel_id = ?
     `;
-    const params = [];
+    const params = [req.hotel_id];
     
     if (fecha_desde) { sql += ' AND DATE(p.fecha) >= ?'; params.push(fecha_desde); }
     if (fecha_hasta) { sql += ' AND DATE(p.fecha) <= ?'; params.push(fecha_hasta); }
@@ -59,29 +65,26 @@ router.post('/', async (req, res) => {
     
     const { reserva_id, monto, metodo_pago, referencia, tipo, notas } = req.body;
     
-    // Verificar reserva
-    const [reserva] = await conn.query('SELECT total, total_pagado, saldo_pendiente FROM reservas WHERE id = ?', [reserva_id]);
+    const [reserva] = await conn.query('SELECT total, total_pagado, saldo_pendiente FROM reservas WHERE id = ? AND hotel_id = ?', [reserva_id, req.hotel_id]);
     if (!reserva.length) {
       await conn.rollback();
       return res.status(404).json({ error: 'Reserva no encontrada' });
     }
     
     const id = uuidv4();
-    const numero_pago = await generarNumeroPago();
+    const numero_pago = await generarNumeroPago(req.hotel_id);
     
-    // Insertar pago
     await conn.query(
-      `INSERT INTO pagos (id, reserva_id, numero_pago, monto, metodo_pago, referencia, tipo, notas) VALUES (?,?,?,?,?,?,?,?)`,
-      [id, reserva_id, numero_pago, monto, metodo_pago, referencia, tipo || 'Abono', notas]
+      `INSERT INTO pagos (id, hotel_id, reserva_id, numero_pago, monto, metodo_pago, referencia, tipo, notas) VALUES (?,?,?,?,?,?,?,?,?)`,
+      [id, req.hotel_id, reserva_id, numero_pago, monto, metodo_pago, referencia, tipo || 'Abono', notas]
     );
     
-    // Actualizar reserva
     const nuevoTotalPagado = parseFloat(reserva[0].total_pagado) + parseFloat(monto);
     const nuevoSaldo = parseFloat(reserva[0].total) - nuevoTotalPagado;
     
     await conn.query(
-      `UPDATE reservas SET total_pagado = ?, saldo_pendiente = ? WHERE id = ?`,
-      [nuevoTotalPagado, nuevoSaldo, reserva_id]
+      `UPDATE reservas SET total_pagado = ?, saldo_pendiente = ? WHERE id = ? AND hotel_id = ?`,
+      [nuevoTotalPagado, nuevoSaldo, reserva_id, req.hotel_id]
     );
     
     await conn.commit();
@@ -105,24 +108,22 @@ router.delete('/:id', async (req, res) => {
   try {
     await conn.beginTransaction();
     
-    const [pago] = await conn.query('SELECT * FROM pagos WHERE id = ?', [req.params.id]);
+    const [pago] = await conn.query('SELECT * FROM pagos WHERE id = ? AND hotel_id = ?', [req.params.id, req.hotel_id]);
     if (!pago.length) {
       await conn.rollback();
       return res.status(404).json({ error: 'Pago no encontrado' });
     }
     
-    // Actualizar reserva
-    const [reserva] = await conn.query('SELECT total_pagado, total FROM reservas WHERE id = ?', [pago[0].reserva_id]);
+    const [reserva] = await conn.query('SELECT total_pagado, total FROM reservas WHERE id = ? AND hotel_id = ?', [pago[0].reserva_id, req.hotel_id]);
     const nuevoTotalPagado = parseFloat(reserva[0].total_pagado) - parseFloat(pago[0].monto);
     const nuevoSaldo = parseFloat(reserva[0].total) - nuevoTotalPagado;
     
     await conn.query(
-      `UPDATE reservas SET total_pagado = ?, saldo_pendiente = ? WHERE id = ?`,
-      [nuevoTotalPagado, nuevoSaldo, pago[0].reserva_id]
+      `UPDATE reservas SET total_pagado = ?, saldo_pendiente = ? WHERE id = ? AND hotel_id = ?`,
+      [nuevoTotalPagado, nuevoSaldo, pago[0].reserva_id, req.hotel_id]
     );
     
-    // Eliminar pago
-    await conn.query('DELETE FROM pagos WHERE id = ?', [req.params.id]);
+    await conn.query('DELETE FROM pagos WHERE id = ? AND hotel_id = ?', [req.params.id, req.hotel_id]);
     
     await conn.commit();
     res.json({ success: true, total_pagado: nuevoTotalPagado, saldo_pendiente: nuevoSaldo });
