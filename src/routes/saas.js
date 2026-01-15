@@ -2,16 +2,17 @@ const router = require('express').Router();
 const pool = require('../config/database');
 const crypto = require('crypto'); 
 
+// Generador de ID para Heroku (sin librerías externas)
 const generateId = () => crypto.randomUUID();
 
-// 1. CUENTAS
+// -----------------------------------------------------------
+// 1. CUENTAS (Basado en tu DESCRIBE: razon_social, email_acceso...)
+// -----------------------------------------------------------
 router.get('/cuentas', async (req, res) => {
   try {
-    // Eliminamos el ORDER BY para evitar el error 1054
-    const [rows] = await pool.query('SELECT * FROM cuentas');
+    const [rows] = await pool.query('SELECT * FROM cuentas ORDER BY razon_social ASC');
     res.json(rows);
   } catch (error) {
-    console.error("Error en GET /cuentas:", error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -30,7 +31,9 @@ router.post('/cuentas', async (req, res) => {
   }
 });
 
+// -----------------------------------------------------------
 // 2. PLANES
+// -----------------------------------------------------------
 router.get('/planes', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM planes');
@@ -40,50 +43,46 @@ router.get('/planes', async (req, res) => {
   }
 });
 
-// 3. SUSCRIPCIONES
+// -----------------------------------------------------------
+// 3. SUSCRIPCIONES (Basado en tu DESCRIBE: fecha_fin, cuenta_id...)
+// -----------------------------------------------------------
 router.get('/suscripciones', async (req, res) => {
   try {
-    // Usamos una consulta más simple para evitar errores de nombres de columna en el JOIN
     const [rows] = await pool.query(`
       SELECT s.*, c.razon_social, p.nombre as plan_nombre 
       FROM suscripciones s
-      LEFT JOIN cuentas c ON s.cuenta_id = c.id
-      LEFT JOIN planes p ON s.plan_id = p.id
+      JOIN cuentas c ON s.cuenta_id = c.id
+      JOIN planes p ON s.plan_id = p.id
+      ORDER BY s.fecha_fin DESC
     `);
     res.json(rows);
   } catch (error) {
-    console.error("Error en GET /suscripciones:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
 router.post('/suscripciones', async (req, res) => {
   try {
-    const { cuenta_id, plan_id, fecha_inicio, fecha_vencimiento } = req.body;
+    const { cuenta_id, plan_id, fecha_inicio, fecha_fin } = req.body;
     const id = generateId();
-    // Nota: Si 'fecha_vencimiento' falla, revisa el nombre en la tabla suscripciones
     await pool.query(
-      'INSERT INTO suscripciones (id, cuenta_id, plan_id, fecha_inicio, fecha_vencimiento, estado) VALUES (?, ?, ?, ?, ?, ?)',
-      [id, cuenta_id, plan_id, fecha_inicio, fecha_vencimiento, 'activa']
-    ).catch(async (err) => {
-        // Intento de rescate si la columna se llama diferente (común en este modelo)
-        return await pool.query(
-            'INSERT INTO suscripciones (id, cuenta_id, plan_id, fecha_inicio, estado) VALUES (?, ?, ?, ?, ?)',
-            [id, cuenta_id, plan_id, fecha_inicio, 'activa']
-        );
-    });
+      'INSERT INTO suscripciones (id, cuenta_id, plan_id, fecha_inicio, fecha_fin, estado) VALUES (?, ?, ?, ?, ?, ?)',
+      [id, cuenta_id, plan_id, fecha_inicio, fecha_fin, 'activa']
+    );
     res.status(201).json({ id, status: 'activa' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// 4. ASIGNACIÓN
+// -----------------------------------------------------------
+// 4. ASIGNACIÓN DE HOTEL
+// -----------------------------------------------------------
 router.patch('/asignar-hotel', async (req, res) => {
   try {
     const { cuenta_id, hotel_id } = req.body;
     await pool.query('UPDATE hotel SET cuenta_id = ? WHERE id = ?', [cuenta_id, hotel_id]);
-    res.json({ success: true });
+    res.json({ success: true, message: 'Hotel vinculado' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
