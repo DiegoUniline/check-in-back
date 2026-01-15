@@ -1,6 +1,9 @@
 const router = require('express').Router();
 const pool = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
+const checkSubscription = require('../middleware/checkSubscription');
+
+router.use(checkSubscription);
 
 // GET todas
 router.get('/', async (req, res) => {
@@ -10,9 +13,9 @@ router.get('/', async (req, res) => {
       SELECT c.*, p.nombre as proveedor_nombre
       FROM compras c
       LEFT JOIN proveedores p ON c.proveedor_id = p.id
-      WHERE 1=1
+      WHERE c.hotel_id = ?
     `;
-    const params = [];
+    const params = [req.hotel_id];
     
     if (proveedor_id) { sql += ' AND c.proveedor_id = ?'; params.push(proveedor_id); }
     if (fecha_desde) { sql += ' AND c.fecha >= ?'; params.push(fecha_desde); }
@@ -30,8 +33,8 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const [compra] = await pool.query(
-      `SELECT c.*, p.nombre as proveedor_nombre FROM compras c LEFT JOIN proveedores p ON c.proveedor_id = p.id WHERE c.id = ?`,
-      [req.params.id]
+      `SELECT c.*, p.nombre as proveedor_nombre FROM compras c LEFT JOIN proveedores p ON c.proveedor_id = p.id WHERE c.id = ? AND c.hotel_id = ?`,
+      [req.params.id, req.hotel_id]
     );
     if (!compra.length) return res.status(404).json({ error: 'No encontrado' });
     
@@ -56,8 +59,8 @@ router.post('/', async (req, res) => {
     const id = uuidv4();
     
     await conn.query(
-      `INSERT INTO compras (id, proveedor_id, fecha, folio_factura, subtotal, impuestos, total, notas) VALUES (?,?,?,?,?,?,?,?)`,
-      [id, proveedor_id, fecha || new Date(), folio_factura, subtotal, impuestos, total, notas]
+      `INSERT INTO compras (id, hotel_id, proveedor_id, fecha, folio_factura, subtotal, impuestos, total, notas) VALUES (?,?,?,?,?,?,?,?,?)`,
+      [id, req.hotel_id, proveedor_id, fecha || new Date(), folio_factura, subtotal, impuestos, total, notas]
     );
     
     if (detalle && detalle.length > 0) {
@@ -97,7 +100,7 @@ router.post('/', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     await pool.query('DELETE FROM compras_detalle WHERE compra_id = ?', [req.params.id]);
-    await pool.query('DELETE FROM compras WHERE id = ?', [req.params.id]);
+    await pool.query('DELETE FROM compras WHERE id = ? AND hotel_id = ?', [req.params.id, req.hotel_id]);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
