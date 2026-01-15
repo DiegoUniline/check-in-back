@@ -37,6 +37,9 @@ app.use('/api/cargos', require('./routes/cargosHabitacion'));
 app.use('/api/conceptos-cargo', require('./routes/conceptos-cargo'));
 app.use('/api/entregables', require('./routes/entregables'));
 
+// --- RUTA AGREGADA PARA DIEGO (SAAS) ---
+app.use('/api/saas', require('./routes/saas')); 
+
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date() });
