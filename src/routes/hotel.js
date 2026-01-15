@@ -1,11 +1,14 @@
 const router = require('express').Router();
 const pool = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
+const checkSubscription = require('../middleware/checkSubscription');
+
+router.use(checkSubscription);
 
 // GET hotel config
 router.get('/', async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT * FROM hotel LIMIT 1');
+    const [rows] = await pool.query('SELECT * FROM hotel WHERE id = ?', [req.hotel_id]);
     res.json(rows[0] || null);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -16,21 +19,17 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const { nombre, razon_social, rfc, direccion, ciudad, estado, pais, telefono, email, hora_checkin, hora_checkout, estrellas } = req.body;
-    const [existing] = await pool.query('SELECT id FROM hotel LIMIT 1');
+    
+    const [existing] = await pool.query('SELECT id FROM hotel WHERE id = ?', [req.hotel_id]);
     
     if (existing.length) {
       await pool.query(
         `UPDATE hotel SET nombre=?, razon_social=?, rfc=?, direccion=?, ciudad=?, estado=?, pais=?, telefono=?, email=?, hora_checkin=?, hora_checkout=?, estrellas=? WHERE id=?`,
-        [nombre, razon_social, rfc, direccion, ciudad, estado, pais, telefono, email, hora_checkin, hora_checkout, estrellas, existing[0].id]
+        [nombre, razon_social, rfc, direccion, ciudad, estado, pais, telefono, email, hora_checkin, hora_checkout, estrellas, req.hotel_id]
       );
-      res.json({ id: existing[0].id, ...req.body });
+      res.json({ id: req.hotel_id, ...req.body });
     } else {
-      const id = uuidv4();
-      await pool.query(
-        `INSERT INTO hotel (id, nombre, razon_social, rfc, direccion, ciudad, estado, pais, telefono, email, hora_checkin, hora_checkout, estrellas) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [id, nombre, razon_social, rfc, direccion, ciudad, estado, pais, telefono, email, hora_checkin, hora_checkout, estrellas]
-      );
-      res.status(201).json({ id, ...req.body });
+      res.status(404).json({ error: 'Hotel no encontrado' });
     }
   } catch (error) {
     res.status(500).json({ error: error.message });
