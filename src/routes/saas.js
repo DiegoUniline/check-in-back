@@ -183,5 +183,44 @@ router.get('/hoteles-asignados', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+// Obtener todos los hoteles
+router.get('/hoteles', async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT * FROM hotel ORDER BY nombre');
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Crear hotel
+router.post('/hoteles', async (req, res) => {
+  const { cuenta_id, nombre, ciudad, telefono } = req.body;
+  try {
+    const id = generateId();
+    await pool.query(
+      'INSERT INTO hotel (id, cuenta_id, nombre, ciudad, telefono) VALUES (?, ?, ?, ?, ?)',
+      [id, cuenta_id, nombre, ciudad, telefono]
+    );
+    res.status(201).json({ id, cuenta_id, nombre, ciudad, telefono });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Crear suscripción con días personalizados
+router.post('/suscripciones', async (req, res) => {
+  const { cuenta_id, hotel_id, plan_id, dias = 30 } = req.body;
+  try {
+    const id = generateId();
+    await pool.query(`
+      INSERT INTO suscripciones (id, cuenta_id, hotel_id, plan_id, fecha_inicio, fecha_fin, estado)
+      VALUES (?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL ? DAY), 'activa')
+    `, [id, cuenta_id, hotel_id, plan_id, dias]);
+    res.status(201).json({ id, message: "Suscripción creada" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 module.exports = router;
