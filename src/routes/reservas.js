@@ -1,13 +1,17 @@
 const router = require('express').Router();
 const pool = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
+const checkSubscription = require('../middleware/checkSubscription');
+
+// Middleware de protección SaaS
+router.use(checkSubscription);
 
 // Generar número de reserva
-const generarNumeroReserva = async () => {
+const generarNumeroReserva = async (hotel_id) => {
   const year = new Date().getFullYear();
   const [rows] = await pool.query(
-    "SELECT COUNT(*) as count FROM reservas WHERE numero_reserva LIKE ?",
-    [`RES-${year}-%`]
+    "SELECT COUNT(*) as count FROM reservas WHERE hotel_id = ? AND numero_reserva LIKE ?",
+    [hotel_id, `RES-${year}-%`]
   );
   const num = (rows[0].count + 1).toString().padStart(4, '0');
   return `RES-${year}-${num}`;
@@ -17,8 +21,8 @@ const generarNumeroReserva = async () => {
 router.get('/', async (req, res) => {
   try {
     const { estado, fecha_desde, fecha_hasta, cliente_id, habitacion_id } = req.query;
-    let sql = 'SELECT * FROM v_reservas_detalle WHERE 1=1';
-    const params = [];
+    let sql = 'SELECT * FROM v_reservas_detalle WHERE hotel_id = ?';
+    const params = [req.hotel_id];
     
     if (estado) { sql += ' AND estado = ?'; params.push(estado); }
     if (fecha_desde) { sql += ' AND fecha_checkin >= ?'; params.push(fecha_desde); }
@@ -38,7 +42,8 @@ router.get('/', async (req, res) => {
 router.get('/checkins-hoy', async (req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT * FROM v_reservas_detalle WHERE DATE(fecha_checkin) = CURDATE() AND estado IN ('Pendiente', 'Confirmada') ORDER BY hora_llegada`
+      `SELECT * FROM v_reservas_detalle WHERE hotel_id = ? AND DATE(fecha_checkin) = CURDATE() AND estado IN ('Pendiente', 'Confirmada') ORDER BY hora_llegada`,
+      [req.hotel_id]
     );
     res.json(rows);
   } catch (error) {
@@ -50,7 +55,8 @@ router.get('/checkins-hoy', async (req, res) => {
 router.get('/checkouts-hoy', async (req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT * FROM v_reservas_detalle WHERE DATE(fecha_checkout) = CURDATE() AND estado = 'CheckIn' ORDER BY fecha_checkout`
+      `SELECT * FROM v_reservas_detalle WHERE hotel_id = ? AND DATE(fecha_checkout) = CURDATE() AND estado = 'CheckIn' ORDER BY fecha_checkout`,
+      [req.hotel_id]
     );
     res.json(rows);
   } catch (error) {
@@ -61,7 +67,7 @@ router.get('/checkouts-hoy', async (req, res) => {
 // GET one
 router.get('/:id', async (req, res) => {
   try {
-    const [rows] = await pool.query('SELECT * FROM v_reservas_detalle WHERE id = ?', [req.params.id]);
+    const [rows] = await pool.query('SELECT * FROM v_reservas_detalle WHERE id = ? AND hotel_id = ?', [req.params.id, req.hotel_id]);
     if (!rows.length) return res.status(404).json({ error: 'No encontrado' });
     
     // Traer pagos
@@ -96,19 +102,17 @@ router.post('/', async (req, res) => {
     } = req.body;
     
     const id = uuidv4();
-    const numero_reserva = await generarNumeroReserva();
+    const numero_reserva = await generarNumeroReserva(req.hotel_id);
     
-    // Calcular noches y totales
+    // Calcular noches y totales (Lógica idéntica a la tuya)
     const checkin = new Date(fecha_checkin);
     const checkout = new Date(fecha_checkout);
-    const noches = Math.ceil((checkout - checkin) / (1000 * 60 * 60 * 24));
+    const noches = Math.ceil((checkout - checkin) / (1000 * 60 * 60 * 24)) || 1;
     
-    // Subtotal hospedaje + cargo persona extra
     const subtotalHospedaje = tarifa_noche * noches;
     const totalPersonaExtra = (personas_extra || 0) * (cargo_persona_extra || 0) * noches;
     const subtotal = subtotalHospedaje + totalPersonaExtra;
     
-    // Calcular descuento
     let descuentoMonto = 0;
     if (descuento_tipo === 'Monto') {
       descuentoMonto = descuento_valor || 0;
@@ -122,15 +126,15 @@ router.post('/', async (req, res) => {
     
     await conn.query(
       `INSERT INTO reservas (
-        id, numero_reserva, cliente_id, habitacion_id, tipo_habitacion_id, 
+        id, hotel_id, numero_reserva, cliente_id, habitacion_id, tipo_habitacion_id, 
         fecha_checkin, fecha_checkout, hora_llegada, adultos, ninos, personas_extra, cargo_persona_extra,
         noches, tarifa_noche, subtotal_hospedaje, 
         descuento_tipo, descuento_valor, descuento_monto,
         total_impuestos, total, total_pagado, saldo_pendiente, 
         estado, origen, solicitudes_especiales, notas_internas
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?)`,
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?)`,
       [
-        id, numero_reserva, cliente_id, habitacion_id, tipo_habitacion_id,
+        id, req.hotel_id, numero_reserva, cliente_id, habitacion_id, tipo_habitacion_id,
         fecha_checkin, fecha_checkout, hora_llegada, adultos || 1, ninos || 0, personas_extra || 0, cargo_persona_extra || 0,
         noches, tarifa_noche, subtotalHospedaje,
         descuento_tipo || null, descuento_valor || 0, descuentoMonto,
@@ -140,7 +144,7 @@ router.post('/', async (req, res) => {
     );
     
     if (habitacion_id) {
-      await conn.query("UPDATE habitaciones SET estado_habitacion = 'Reservada' WHERE id = ?", [habitacion_id]);
+      await conn.query("UPDATE habitaciones SET estado_habitacion = 'Reservada' WHERE id = ? AND hotel_id = ?", [habitacion_id, req.hotel_id]);
     }
     
     await conn.commit();
@@ -153,18 +157,14 @@ router.post('/', async (req, res) => {
   }
 });
 
-// PUT actualizar reserva (CORREGIDO - soporta actualizaciones parciales)
+// PUT actualizar reserva
 router.put('/:id', async (req, res) => {
   try {
-    // Obtener reserva actual
-    const [current] = await pool.query('SELECT * FROM reservas WHERE id = ?', [req.params.id]);
-    if (!current.length) {
-      return res.status(404).json({ error: 'Reserva no encontrada' });
-    }
+    const [current] = await pool.query('SELECT * FROM reservas WHERE id = ? AND hotel_id = ?', [req.params.id, req.hotel_id]);
+    if (!current.length) return res.status(404).json({ error: 'Reserva no encontrada' });
     
     const reserva = current[0];
     
-    // Mezclar valores actuales con los nuevos (usa el nuevo si viene, si no usa el actual)
     const habitacion_id = req.body.habitacion_id ?? reserva.habitacion_id;
     const tipo_habitacion_id = req.body.tipo_habitacion_id ?? reserva.tipo_habitacion_id;
     const fecha_checkin = req.body.fecha_checkin ?? reserva.fecha_checkin;
@@ -177,7 +177,6 @@ router.put('/:id', async (req, res) => {
     const notas_internas = req.body.notas_internas ?? reserva.notas_internas;
     const estado = req.body.estado ?? reserva.estado;
     
-    // Recalcular totales
     const checkin = new Date(fecha_checkin);
     const checkout = new Date(fecha_checkout);
     const noches = Math.ceil((checkout - checkin) / (1000 * 60 * 60 * 24)) || 1;
@@ -192,13 +191,13 @@ router.put('/:id', async (req, res) => {
         hora_llegada=?, adultos=?, ninos=?, noches=?, tarifa_noche=?, 
         subtotal_hospedaje=?, total_impuestos=?, total=?, saldo_pendiente=?, 
         solicitudes_especiales=?, notas_internas=?, estado=?
-      WHERE id=?`,
+      WHERE id=? AND hotel_id=?`,
       [
         habitacion_id, tipo_habitacion_id, fecha_checkin, fecha_checkout,
         hora_llegada, adultos, ninos, noches, tarifa_noche,
         subtotal, impuestos, total, saldo,
         solicitudes_especiales, notas_internas, estado,
-        req.params.id
+        req.params.id, req.hotel_id
       ]
     );
     
@@ -213,9 +212,8 @@ router.post('/:id/checkin', async (req, res) => {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    
     const { habitacion_id } = req.body;
-    const [reserva] = await conn.query('SELECT * FROM reservas WHERE id = ?', [req.params.id]);
+    const [reserva] = await conn.query('SELECT * FROM reservas WHERE id = ? AND hotel_id = ?', [req.params.id, req.hotel_id]);
     
     if (!reserva.length) {
       await conn.rollback();
@@ -228,23 +226,14 @@ router.post('/:id/checkin', async (req, res) => {
       return res.status(400).json({ error: 'Debe asignar una habitación' });
     }
     
-    // Actualizar reserva
     await conn.query(
-      `UPDATE reservas SET estado = 'CheckIn', checkin_realizado = TRUE, fecha_checkin_real = NOW(), habitacion_id = ? WHERE id = ?`,
-      [habId, req.params.id]
+      `UPDATE reservas SET estado = 'CheckIn', checkin_realizado = TRUE, fecha_checkin_real = NOW(), habitacion_id = ? WHERE id = ? AND hotel_id = ?`,
+      [habId, req.params.id, req.hotel_id]
     );
     
-    // Actualizar habitación
-    await conn.query(
-      `UPDATE habitaciones SET estado_habitacion = 'Ocupada' WHERE id = ?`,
-      [habId]
-    );
+    await conn.query(`UPDATE habitaciones SET estado_habitacion = 'Ocupada' WHERE id = ? AND hotel_id = ?`, [habId, req.hotel_id]);
     
-    // Incrementar estancias del cliente
-    await conn.query(
-      `UPDATE clientes SET total_estancias = total_estancias + 1 WHERE id = ?`,
-      [reserva[0].cliente_id]
-    );
+    await conn.query(`UPDATE clientes SET total_estancias = total_estancias + 1 WHERE id = ? AND hotel_id = ?`, [reserva[0].cliente_id, req.hotel_id]);
     
     await conn.commit();
     res.json({ success: true, message: 'Check-in realizado' });
@@ -261,8 +250,7 @@ router.post('/:id/checkout', async (req, res) => {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    
-    const [reserva] = await conn.query('SELECT * FROM reservas WHERE id = ?', [req.params.id]);
+    const [reserva] = await conn.query('SELECT * FROM reservas WHERE id = ? AND hotel_id = ?', [req.params.id, req.hotel_id]);
     
     if (!reserva.length) {
       await conn.rollback();
@@ -274,22 +262,13 @@ router.post('/:id/checkout', async (req, res) => {
       return res.status(400).json({ error: 'Tiene saldo pendiente', saldo: reserva[0].saldo_pendiente });
     }
     
-    // Actualizar reserva
-    await conn.query(
-      `UPDATE reservas SET estado = 'CheckOut', checkout_realizado = TRUE, fecha_checkout_real = NOW() WHERE id = ?`,
-      [req.params.id]
-    );
+    await conn.query(`UPDATE reservas SET estado = 'CheckOut', checkout_realizado = TRUE, fecha_checkout_real = NOW() WHERE id = ? AND hotel_id = ?`, [req.params.id, req.hotel_id]);
     
-    // Actualizar habitación
-    await conn.query(
-      `UPDATE habitaciones SET estado_habitacion = 'Disponible', estado_limpieza = 'Sucia' WHERE id = ?`,
-      [reserva[0].habitacion_id]
-    );
+    await conn.query(`UPDATE habitaciones SET estado_habitacion = 'Disponible', estado_limpieza = 'Sucia' WHERE id = ? AND hotel_id = ?`, [reserva[0].habitacion_id, req.hotel_id]);
     
-    // Crear tarea de limpieza
     await conn.query(
-      `INSERT INTO tareas_limpieza (id, habitacion_id, fecha, tipo, prioridad, estado) VALUES (?, ?, CURDATE(), 'Checkout', 'Alta', 'Pendiente')`,
-      [uuidv4(), reserva[0].habitacion_id]
+      `INSERT INTO tareas_limpieza (id, hotel_id, habitacion_id, fecha, tipo, prioridad, estado) VALUES (?, ?, ?, CURDATE(), 'Checkout', 'Alta', 'Pendiente')`,
+      [uuidv4(), req.hotel_id, reserva[0].habitacion_id]
     );
     
     await conn.commit();
@@ -306,17 +285,16 @@ router.post('/:id/checkout', async (req, res) => {
 router.post('/:id/cancelar', async (req, res) => {
   try {
     const { motivo } = req.body;
-    const [reserva] = await pool.query('SELECT habitacion_id FROM reservas WHERE id = ?', [req.params.id]);
+    const [reserva] = await pool.query('SELECT habitacion_id FROM reservas WHERE id = ? AND hotel_id = ?', [req.params.id, req.hotel_id]);
     
     await pool.query(
-      `UPDATE reservas SET estado = 'Cancelada', notas_internas = CONCAT(IFNULL(notas_internas,''), '\nCancelada: ', ?) WHERE id = ?`,
-      [motivo || 'Sin motivo', req.params.id]
+      `UPDATE reservas SET estado = 'Cancelada', notas_internas = CONCAT(IFNULL(notas_internas,''), '\nCancelada: ', ?) WHERE id = ? AND hotel_id = ?`,
+      [motivo || 'Sin motivo', req.params.id, req.hotel_id]
     );
     
     if (reserva[0]?.habitacion_id) {
-      await pool.query(`UPDATE habitaciones SET estado_habitacion = 'Disponible' WHERE id = ?`, [reserva[0].habitacion_id]);
+      await pool.query(`UPDATE habitaciones SET estado_habitacion = 'Disponible' WHERE id = ? AND hotel_id = ?`, [reserva[0].habitacion_id, req.hotel_id]);
     }
-    
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -326,7 +304,7 @@ router.post('/:id/cancelar', async (req, res) => {
 // PATCH confirmar
 router.patch('/:id/confirmar', async (req, res) => {
   try {
-    await pool.query(`UPDATE reservas SET estado = 'Confirmada' WHERE id = ?`, [req.params.id]);
+    await pool.query(`UPDATE reservas SET estado = 'Confirmada' WHERE id = ? AND hotel_id = ?`, [req.params.id, req.hotel_id]);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
