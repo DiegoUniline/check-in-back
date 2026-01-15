@@ -2,11 +2,11 @@ const router = require('express').Router();
 const pool = require('../config/database');
 const crypto = require('crypto');
 
-// Función para generar IDs únicos si no usas AUTO_INCREMENT
+// Función para generar IDs únicos (UUID)
 const generateId = () => crypto.randomUUID();
 
 // ==========================================
-// 1. PLANES (Ver, Crear, Editar)
+// 1. PLANES (Gestión de Costos y Límites)
 // ==========================================
 
 // Obtener todos los planes
@@ -28,13 +28,13 @@ router.post('/planes', async (req, res) => {
             'INSERT INTO planes (id, nombre, costo_mensual, limite_hoteles, limite_habitaciones_por_hotel) VALUES (?, ?, ?, ?, ?)',
             [id, nombre, costo_mensual, limite_hoteles, limite_habitaciones_por_hotel]
         );
-        res.status(201).json({ id, message: "Plan creado" });
+        res.status(201).json({ id, message: "Plan creado con éxito" });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-// Editar un plan
+// Editar un plan existente
 router.put('/planes/:id', async (req, res) => {
     const { id } = req.params;
     const { nombre, costo_mensual, limite_hoteles, limite_habitaciones_por_hotel } = req.body;
@@ -43,21 +43,22 @@ router.put('/planes/:id', async (req, res) => {
             'UPDATE planes SET nombre = ?, costo_mensual = ?, limite_hoteles = ?, limite_habitaciones_por_hotel = ? WHERE id = ?',
             [nombre, costo_mensual, limite_hoteles, limite_habitaciones_por_hotel, id]
         );
-        res.json({ message: "Plan actualizado" });
+        res.json({ message: "Plan actualizado correctamente" });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
 // ==========================================
-// 2. CUENTAS (Clientes)
+// 2. CUENTAS (Gestión de Clientes/Dueños)
 // ==========================================
 
-// Obtener cuentas
+// Obtener todas las cuentas con su contador de hoteles
 router.get('/cuentas', async (req, res) => {
     try {
         const [rows] = await pool.query(`
-            SELECT c.*, (SELECT COUNT(*) FROM hotel h WHERE h.cuenta_id = c.id) as total_hoteles 
+            SELECT c.*, 
+            (SELECT COUNT(*) FROM hotel h WHERE h.cuenta_id = c.id) as total_hoteles 
             FROM cuentas c 
             ORDER BY created_at DESC
         `);
@@ -67,36 +68,37 @@ router.get('/cuentas', async (req, res) => {
     }
 });
 
-// Crear cuenta nueva (Botón NUEVO CLIENTE)
+// Crear cliente nuevo
 router.post('/cuentas', async (req, res) => {
     const { razon_social, email, password } = req.body;
     try {
         const id = generateId();
+        // Nota: En un entorno real, usa bcrypt para la contraseña
         await pool.query(
             'INSERT INTO cuentas (id, razon_social, email, password, activo) VALUES (?, ?, ?, ?, 1)',
-            [id, razon_social, email, password] // Aquí podrías encriptar el pass si quieres
+            [id, razon_social, email, password]
         );
-        res.status(201).json({ id, message: "Cliente creado" });
+        res.status(201).json({ id, message: "Cliente creado correctamente" });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-// Eliminar cuenta
+// Eliminar un cliente
 router.delete('/cuentas/:id', async (req, res) => {
     try {
         await pool.query('DELETE FROM cuentas WHERE id = ?', [req.params.id]);
-        res.json({ message: "Cliente eliminado" });
+        res.json({ message: "Cliente eliminado del sistema" });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
 // ==========================================
-// 3. SUSCRIPCIONES (Acceso a Hoteles)
+// 3. SUSCRIPCIONES (Control de Pagos y Acceso)
 // ==========================================
 
-// Obtener todas las suscripciones detalladas
+// Listado global de suscripciones para el Dashboard
 router.get('/suscripciones', async (req, res) => {
     try {
         const [rows] = await pool.query(`
@@ -119,36 +121,51 @@ router.get('/suscripciones', async (req, res) => {
     }
 });
 
-// Extender suscripción (+30 días)
+// Extender suscripción (+30 días o personalizados)
 router.post('/suscripciones/:id/extender', async (req, res) => {
     const { id } = req.params;
     const { dias = 30 } = req.body;
     try {
-        // SQL: Si ya venció, suma desde hoy. Si no, suma desde la fecha fin.
+        // Lógica inteligente: Si ya venció, suma desde hoy. Si no, suma desde la fecha de vencimiento actual.
         await pool.query(`
             UPDATE suscripciones 
             SET fecha_fin = DATE_ADD(GREATEST(fecha_fin, NOW()), INTERVAL ? DAY),
                 estado = 'activa'
             WHERE id = ?
         `, [dias, id]);
-        res.json({ message: "Días agregados con éxito" });
+        res.json({ message: "Suscripción extendida con éxito" });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-// Eliminar suscripción (Cortar acceso)
+// Asignar plan manualmente a un hotel
+router.post('/suscripciones/asignar', async (req, res) => {
+    const { cuenta_id, plan_id, hotel_id } = req.body;
+    try {
+        const id = generateId();
+        await pool.query(`
+            INSERT INTO suscripciones (id, cuenta_id, plan_id, hotel_id, fecha_inicio, fecha_fin, estado)
+            VALUES (?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 30 DAY), 'activa')
+        `, [id, cuenta_id, plan_id, hotel_id]);
+        res.json({ message: "Plan asignado al hotel correctamente" });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Cancelar/Eliminar suscripción
 router.delete('/suscripciones/:id', async (req, res) => {
     try {
         await pool.query('DELETE FROM suscripciones WHERE id = ?', [req.params.id]);
-        res.json({ message: "Suscripción eliminada" });
+        res.json({ message: "Suscripción cancelada" });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
 // ==========================================
-// 4. HOTELES (Vista Relacional)
+// 4. HOTELES (Vista Relacional Detallada)
 // ==========================================
 
 router.get('/hoteles-asignados', async (req, res) => {
