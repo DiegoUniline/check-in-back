@@ -23,15 +23,30 @@ router.post('/login', async (req, res) => {
     
     await pool.query('UPDATE usuarios SET ultimo_login = NOW() WHERE id = ?', [user.id]);
     
+    // INCLUIR cuenta_id en el token
     const token = jwt.sign(
-      { id: user.id, email: user.email, nombre: user.nombre, rol: user.rol, hotel_id: user.hotel_id },
+      { 
+        id: user.id, 
+        email: user.email, 
+        nombre: user.nombre, 
+        rol: user.rol, 
+        hotel_id: user.hotel_id,
+        cuenta_id: user.cuenta_id  // <-- AGREGADO
+      },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
     );
     
     res.json({
       token,
-      user: { id: user.id, email: user.email, nombre: user.nombre, rol: user.rol, hotel_id: user.hotel_id }
+      user: { 
+        id: user.id, 
+        email: user.email, 
+        nombre: user.nombre, 
+        rol: user.rol, 
+        hotel_id: user.hotel_id,
+        cuenta_id: user.cuenta_id  // <-- AGREGADO
+      }
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -41,57 +56,21 @@ router.post('/login', async (req, res) => {
 // Register (solo admin)
 router.post('/register', async (req, res) => {
   try {
-    const { email, password, nombre, rol, hotel_id } = req.body;
+    const { email, password, nombre, rol, hotel_id, cuenta_id } = req.body;  // <-- AGREGADO cuenta_id
     const hashedPassword = await bcrypt.hash(password, 10);
     const id = uuidv4();
     
     await pool.query(
-      'INSERT INTO usuarios (id, email, password_hash, nombre, rol, hotel_id) VALUES (?, ?, ?, ?, ?, ?)',
-      [id, email, hashedPassword, nombre, rol || 'Recepcion', hotel_id]
+      'INSERT INTO usuarios (id, email, password_hash, nombre, rol, hotel_id, cuenta_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [id, email, hashedPassword, nombre, rol || 'Recepcion', hotel_id, cuenta_id]  // <-- AGREGADO
     );
     
-    res.status(201).json({ id, email, nombre, rol, hotel_id });
+    res.status(201).json({ id, email, nombre, rol, hotel_id, cuenta_id });
   } catch (error) {
     if (error.code === 'ER_DUP_ENTRY') {
       return res.status(400).json({ error: 'Email ya registrado' });
     }
     res.status(500).json({ error: error.message });
-  }
-});
-
-// Setup admin - BORRAR DESPUÉS
-router.get('/setup', async (req, res) => {
-  try {
-    const hash = await bcrypt.hash('123456', 10);
-    await pool.query('DELETE FROM usuarios WHERE email = ?', ['diego.leon@uniline.mx']);
-    await pool.query(
-      'INSERT INTO usuarios (id, email, password_hash, nombre, rol, activo, hotel_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [uuidv4(), 'diego.leon@uniline.mx', hash, 'Diego León', 'Admin', true, 'h1']
-    );
-    res.json({ ok: true, message: 'Usuario creado' });
-  } catch (e) {
-    res.json({ error: e.message });
-  }
-});
-
-// Debug - BORRAR DESPUÉS
-router.get('/debug', async (req, res) => {
-  try {
-    const [users] = await pool.query('SELECT id, email, password_hash, activo, hotel_id FROM usuarios WHERE email = ?', ['diego.leon@uniline.mx']);
-    if (!users.length) {
-      return res.json({ error: 'Usuario no encontrado' });
-    }
-    const user = users[0];
-    const testPassword = await bcrypt.compare('123456', user.password_hash);
-    res.json({ 
-      encontrado: true,
-      activo: user.activo,
-      hotel_id: user.hotel_id,
-      passwordValido: testPassword,
-      hashGuardado: user.password_hash.substring(0, 20) + '...'
-    });
-  } catch (e) {
-    res.json({ error: e.message });
   }
 });
 
