@@ -5,6 +5,8 @@ const checkSubscription = require('../middleware/checkSubscription');
 router.use(checkSubscription);
 
 // GET estadísticas principales
+// routes/dashboard.js - REEMPLAZA router.get('/stats')
+
 router.get('/stats', async (req, res) => {
   try {
     const [habitaciones] = await pool.query(`
@@ -12,29 +14,24 @@ router.get('/stats', async (req, res) => {
         COUNT(*) as total_habitaciones,
         SUM(CASE WHEN estado_habitacion = 'Ocupada' THEN 1 ELSE 0 END) as ocupadas,
         SUM(CASE WHEN estado_habitacion = 'Disponible' THEN 1 ELSE 0 END) as disponibles,
-        SUM(CASE WHEN estado_habitacion = 'Reservada' THEN 1 ELSE 0 END) as reservadas
+        SUM(CASE WHEN estado_habitacion = 'Reservada' THEN 1 ELSE 0 END) as reservadas,
+        SUM(CASE WHEN estado_habitacion = 'Limpieza' THEN 1 ELSE 0 END) as pendientes_limpieza,
+        SUM(CASE WHEN estado_habitacion = 'Mantenimiento' THEN 1 ELSE 0 END) as pendientes_mantenimiento
       FROM habitaciones WHERE hotel_id = ? AND activo = TRUE
     `, [req.hotel_id]);
 
-    const [checkinsHoy] = await pool.query(`
-      SELECT COUNT(*) as total FROM reservas 
-      WHERE hotel_id = ? AND DATE(fecha_checkin) = CURDATE() AND estado IN ('Pendiente', 'Confirmada')
-    `, [req.hotel_id]);
-
-    const [checkoutsHoy] = await pool.query(`
-      SELECT COUNT(*) as total FROM reservas 
-      WHERE hotel_id = ? AND DATE(fecha_checkout) = CURDATE() AND estado = 'CheckIn'
-    `, [req.hotel_id]);
-
     const stats = habitaciones[0];
+    
+    // Ocupación = (Ocupadas + Reservadas + Limpieza + Mantenimiento) / Total
+    const habitacionesOcupadas = (stats.ocupadas || 0) + (stats.reservadas || 0) + 
+                                 (stats.pendientes_limpieza || 0) + (stats.pendientes_mantenimiento || 0);
+    
     const ocupacionPorcentaje = stats.total_habitaciones > 0 
-      ? Math.round((stats.ocupadas / stats.total_habitaciones) * 100) 
+      ? Math.round((habitacionesOcupadas / stats.total_habitaciones) * 100) 
       : 0;
 
     res.json({
       ...stats,
-      checkins_hoy: checkinsHoy[0].total,
-      checkouts_hoy: checkoutsHoy[0].total,
       ocupacion_porcentaje: ocupacionPorcentaje
     });
   } catch (error) {
