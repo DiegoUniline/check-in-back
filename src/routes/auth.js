@@ -23,7 +23,6 @@ router.post('/login', async (req, res) => {
     
     await pool.query('UPDATE usuarios SET ultimo_login = NOW() WHERE id = ?', [user.id]);
     
-    // INCLUIR cuenta_id en el token
     const token = jwt.sign(
       { 
         id: user.id, 
@@ -31,7 +30,7 @@ router.post('/login', async (req, res) => {
         nombre: user.nombre, 
         rol: user.rol, 
         hotel_id: user.hotel_id,
-        cuenta_id: user.cuenta_id  // <-- AGREGADO
+        cuenta_id: user.cuenta_id
       },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
@@ -45,7 +44,7 @@ router.post('/login', async (req, res) => {
         nombre: user.nombre, 
         rol: user.rol, 
         hotel_id: user.hotel_id,
-        cuenta_id: user.cuenta_id  // <-- AGREGADO
+        cuenta_id: user.cuenta_id
       }
     });
   } catch (error) {
@@ -53,16 +52,16 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// Register (solo admin)
+// Register
 router.post('/register', async (req, res) => {
   try {
-    const { email, password, nombre, rol, hotel_id, cuenta_id } = req.body;  // <-- AGREGADO cuenta_id
+    const { email, password, nombre, rol, hotel_id, cuenta_id } = req.body;
     const hashedPassword = await bcrypt.hash(password, 10);
     const id = uuidv4();
     
     await pool.query(
       'INSERT INTO usuarios (id, email, password_hash, nombre, rol, hotel_id, cuenta_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [id, email, hashedPassword, nombre, rol || 'Recepcion', hotel_id, cuenta_id]  // <-- AGREGADO
+      [id, email, hashedPassword, nombre, rol || 'Recepcion', hotel_id || null, cuenta_id]
     );
     
     res.status(201).json({ id, email, nombre, rol, hotel_id, cuenta_id });
