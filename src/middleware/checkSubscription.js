@@ -3,10 +3,39 @@ const pool = require('../config/database');
 const checkSubscription = async (req, res, next) => {
   try {
     const hotel_id = req.headers['x-hotel-id']; 
+    
     if (!hotel_id) {
       return res.status(403).json({ error: "Falta identificación del Hotel (x-hotel-id)" });
     }
 
+    // VALIDAR que el hotel pertenezca a la cuenta del usuario
+    const usuario_cuenta_id = req.user?.cuenta_id;
+    const usuario_hotel_id = req.user?.hotel_id;
+
+    // Si el usuario tiene hotel_id específico, solo puede acceder a ese hotel
+    if (usuario_hotel_id && usuario_hotel_id !== hotel_id) {
+      return res.status(403).json({ 
+        error: "Acceso denegado", 
+        message: "No tienes permiso para acceder a este hotel."
+      });
+    }
+
+    // Si el usuario es admin de cuenta (hotel_id = null), validar que el hotel pertenezca a su cuenta
+    if (!usuario_hotel_id && usuario_cuenta_id) {
+      const [hotelCheck] = await pool.query(
+        'SELECT id FROM hotel WHERE id = ? AND cuenta_id = ?',
+        [hotel_id, usuario_cuenta_id]
+      );
+      
+      if (!hotelCheck.length) {
+        return res.status(403).json({ 
+          error: "Acceso denegado", 
+          message: "Este hotel no pertenece a tu cuenta."
+        });
+      }
+    }
+
+    // Validar suscripción
     const [rows] = await pool.query(`
       SELECT s.estado, s.fecha_fin, c.activo
       FROM suscripciones s
@@ -41,6 +70,7 @@ const checkSubscription = async (req, res, next) => {
     }
 
     req.hotel_id = hotel_id;
+    req.cuenta_id = usuario_cuenta_id;
     next();
   } catch (error) {
     console.error('Error checkSubscription:', error);
