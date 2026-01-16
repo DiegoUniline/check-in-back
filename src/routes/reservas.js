@@ -7,14 +7,20 @@ const checkSubscription = require('../middleware/checkSubscription');
 router.use(checkSubscription);
 
 // Generar número de reserva
+// Generar número de reserva - CORREGIDO
 const generarNumeroReserva = async (hotel_id) => {
   const year = new Date().getFullYear();
+  
+  // Buscar el MAX del consecutivo, no COUNT
   const [rows] = await pool.query(
-    "SELECT COUNT(*) as count FROM reservas WHERE hotel_id = ? AND numero_reserva LIKE ?",
+    `SELECT MAX(CAST(SUBSTRING_INDEX(numero_reserva, '-', -1) AS UNSIGNED)) as ultimo
+     FROM reservas 
+     WHERE hotel_id = ? AND numero_reserva LIKE ?`,
     [hotel_id, `RES-${year}-%`]
   );
-  const num = (rows[0].count + 1).toString().padStart(4, '0');
-  return `RES-${year}-${num}`;
+  
+  const siguiente = (rows[0].ultimo || 0) + 1;
+  return `RES-${year}-${siguiente.toString().padStart(4, '0')}`;
 };
 
 // GET all con filtros
