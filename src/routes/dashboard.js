@@ -5,8 +5,6 @@ const checkSubscription = require('../middleware/checkSubscription');
 router.use(checkSubscription);
 
 // GET estadísticas principales
-// routes/dashboard.js - REEMPLAZA router.get('/stats')
-
 router.get('/stats', async (req, res) => {
   try {
     const [habitaciones] = await pool.query(`
@@ -85,30 +83,47 @@ router.get('/checkouts-hoy', async (req, res) => {
 // GET ventas del día
 router.get('/ventas-hoy', async (req, res) => {
   try {
-    const [pagos] = await pool.query(`
+    // Total cobrado HOY
+    const [pagosHoy] = await pool.query(`
       SELECT COALESCE(SUM(monto), 0) as total
       FROM pagos
       WHERE hotel_id = ? AND DATE(fecha) = CURDATE()
     `, [req.hotel_id]);
     
-    const [cargos] = await pool.query(`
-      SELECT COALESCE(SUM(ch.total), 0) as total
+    // Desglose por concepto de cargos HOY
+    const [cargosPorConcepto] = await pool.query(`
+      SELECT 
+        cc.tipo,
+        COALESCE(SUM(ch.total), 0) as total
       FROM cargos_habitacion ch
+      JOIN conceptos_cargo cc ON ch.concepto_cargo_id = cc.id
       JOIN reservas r ON ch.reserva_id = r.id
       WHERE r.hotel_id = ? AND DATE(ch.fecha) = CURDATE()
+      GROUP BY cc.tipo
     `, [req.hotel_id]);
     
-    const [porMetodo] = await pool.query(`
-      SELECT metodo_pago, SUM(monto) as total
-      FROM pagos
-      WHERE hotel_id = ? AND DATE(fecha) = CURDATE()
-      GROUP BY metodo_pago
-    `, [req.hotel_id]);
+    // Mapear conceptos a categorías
+    let alojamiento = 0;
+    let alimentos = 0;
+    let servicios = 0;
+    
+    cargosPorConcepto.forEach(c => {
+      if (c.tipo === 'Hospedaje' || c.tipo === 'Alojamiento') {
+        alojamiento += c.total;
+      } else if (c.tipo === 'Alimentos' || c.tipo === 'Bebidas' || c.tipo === 'Alimentos y Bebidas') {
+        alimentos += c.total;
+      } else {
+        servicios += c.total;
+      }
+    });
+    
+    const total = pagosHoy[0].total;
     
     res.json({
-      total_cobrado: pagos[0].total,
-      total_cargos: cargos[0].total,
-      por_metodo: porMetodo
+      total: total,
+      alojamiento: alojamiento,
+      alimentos: alimentos,
+      servicios: servicios
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
