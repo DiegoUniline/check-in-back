@@ -163,7 +163,7 @@ router.get('/suscripciones', async (req, res) => {
         h.nombre as hotel_nombre,
         p.nombre as plan_nombre,
         p.costo_mensual,
-        DATEDIFF(s.fecha_fin, NOW()) as dias_restantes
+        DATEDIFF(DATE(s.fecha_fin), CURDATE()) as dias_restantes
       FROM suscripciones s
       JOIN cuentas c ON s.cuenta_id = c.id
       LEFT JOIN hotel h ON s.hotel_id = h.id
@@ -171,6 +171,30 @@ router.get('/suscripciones', async (req, res) => {
       ORDER BY s.fecha_fin ASC
     `);
     res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/mi-suscripcion/:hotel_id', async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT 
+        s.*,
+        p.nombre as plan_nombre,
+        DATEDIFF(DATE(s.fecha_fin), CURDATE()) as dias_restantes
+      FROM suscripciones s
+      LEFT JOIN planes p ON s.plan_id = p.id
+      WHERE s.hotel_id = ? AND s.estado = 'activa'
+      ORDER BY s.fecha_fin DESC
+      LIMIT 1
+    `, [req.params.hotel_id]);
+    
+    if (rows.length === 0) {
+      return res.json({ dias_restantes: -999, mensaje: 'Sin suscripción activa' });
+    }
+    
+    res.json(rows[0]);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -196,7 +220,7 @@ router.post('/suscripciones/:id/extender', async (req, res) => {
   try {
     await pool.query(`
       UPDATE suscripciones 
-      SET fecha_fin = DATE_ADD(GREATEST(fecha_fin, NOW()), INTERVAL ? DAY),
+      SET fecha_fin = DATE_ADD(GREATEST(DATE(fecha_fin), CURDATE()), INTERVAL ? DAY),
           estado = 'activa'
       WHERE id = ?
     `, [dias, id]);
@@ -245,7 +269,7 @@ router.get('/hoteles-asignados', async (req, res) => {
         s.fecha_inicio,
         s.fecha_fin, 
         s.estado as suscripcion_estado,
-        DATEDIFF(s.fecha_fin, NOW()) as dias_restantes
+        DATEDIFF(DATE(s.fecha_fin), CURDATE()) as dias_restantes
       FROM hotel h
       LEFT JOIN cuentas c ON h.cuenta_id = c.id
       LEFT JOIN suscripciones s ON s.hotel_id = h.id
@@ -257,39 +281,13 @@ router.get('/hoteles-asignados', async (req, res) => {
   }
 });
 
-// Estado suscripción del hotel actual
-router.get('/mi-suscripcion/:hotel_id', async (req, res) => {
-  try {
-    const [rows] = await pool.query(`
-      SELECT 
-        s.*,
-        p.nombre as plan_nombre,
-        DATEDIFF(s.fecha_fin, NOW()) as dias_restantes
-      FROM suscripciones s
-      LEFT JOIN planes p ON s.plan_id = p.id
-      WHERE s.hotel_id = ? AND s.estado = 'activa'
-      ORDER BY s.fecha_fin DESC
-      LIMIT 1
-    `, [req.params.hotel_id]);
-    
-    if (rows.length === 0) {
-      return res.json({ dias_restantes: -1, mensaje: 'Sin suscripción activa' });
-    }
-    
-    res.json(rows[0]);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Dashboard resumen
 router.get('/dashboard', async (req, res) => {
   try {
     const [[cuentas]] = await pool.query('SELECT COUNT(*) as total FROM cuentas WHERE activo = 1');
     const [[hoteles]] = await pool.query('SELECT COUNT(*) as total FROM hotel');
     const [[activas]] = await pool.query("SELECT COUNT(*) as total FROM suscripciones WHERE estado = 'activa'");
-    const [[porVencer]] = await pool.query("SELECT COUNT(*) as total FROM suscripciones WHERE estado = 'activa' AND DATEDIFF(fecha_fin, NOW()) <= 7");
-    const [[vencidas]] = await pool.query("SELECT COUNT(*) as total FROM suscripciones WHERE estado = 'activa' AND fecha_fin < NOW()");
+    const [[porVencer]] = await pool.query("SELECT COUNT(*) as total FROM suscripciones WHERE estado = 'activa' AND DATEDIFF(DATE(fecha_fin), CURDATE()) <= 7 AND DATEDIFF(DATE(fecha_fin), CURDATE()) >= 0");
+    const [[vencidas]] = await pool.query("SELECT COUNT(*) as total FROM suscripciones WHERE estado = 'activa' AND DATE(fecha_fin) < CURDATE()");
     
     res.json({
       total_cuentas: cuentas.total,
