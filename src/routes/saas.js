@@ -257,6 +257,31 @@ router.get('/hoteles-asignados', async (req, res) => {
   }
 });
 
+// Estado suscripción del hotel actual
+router.get('/mi-suscripcion/:hotel_id', async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT 
+        s.*,
+        p.nombre as plan_nombre,
+        DATEDIFF(s.fecha_fin, NOW()) as dias_restantes
+      FROM suscripciones s
+      LEFT JOIN planes p ON s.plan_id = p.id
+      WHERE s.hotel_id = ? AND s.estado = 'activa'
+      ORDER BY s.fecha_fin DESC
+      LIMIT 1
+    `, [req.params.hotel_id]);
+    
+    if (rows.length === 0) {
+      return res.json({ dias_restantes: -1, mensaje: 'Sin suscripción activa' });
+    }
+    
+    res.json(rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Dashboard resumen
 router.get('/dashboard', async (req, res) => {
   try {
