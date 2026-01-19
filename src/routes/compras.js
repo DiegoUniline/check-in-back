@@ -61,11 +61,10 @@ router.post('/', async (req, res) => {
     const { proveedor_id, fecha, folio_factura, subtotal, impuestos, total, notas, detalle } = req.body;
     const id = uuidv4();
     
-    // Insertar encabezado
-    await conn.query(
-      `INSERT INTO compras (id, hotel_id, proveedor_id, fecha, folio_factura, subtotal, impuestos, total, notas) VALUES (?,?,?,?,?,?,?,?,?)`,
-      [id, req.hotel_id, proveedor_id, fecha || new Date(), folio_factura || null, subtotal || 0, impuestos || 0, total || 0, notas || null]
-    );
+await conn.query(
+  `INSERT INTO movimientos_inventario (id, producto_id, tipo, cantidad, stock_anterior, stock_nuevo, referencia) VALUES (?,?,'Entrada',?,?,?,?)`,
+  [uuidv4(), productoId, cantidad, stockAnterior, stockNuevo, `Compra ${folio_factura || id}`]
+);
     
     console.log('=== COMPRA CREADA ===', id);
     
