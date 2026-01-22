@@ -81,6 +81,20 @@ router.patch('/:id/estado', async (req, res) => {
     await conn.beginTransaction();
     
     const { estado, costo_real } = req.body;
+
+    /*
+      Normalización defensiva de estados (evita bugs por diferencias de string entre front/back).
+      - Consumido por `Check-In-Front/src/pages/Mantenimiento.tsx` vía `api.updateEstadoMantenimiento(...)`.
+      - El schema real define `tareas_mantenimiento.estado` como ENUM('Pendiente','EnProceso','Completada','Cancelada').
+      - Históricamente en el front se usó `Completado` (masculino). Aquí lo convertimos a `Completada`.
+    */
+    let estadoNormalizado = estado;
+    if (typeof estadoNormalizado === 'string') {
+      estadoNormalizado = estadoNormalizado.trim();
+      if (estadoNormalizado === 'En Proceso') estadoNormalizado = 'EnProceso';
+      if (estadoNormalizado === 'Abierto') estadoNormalizado = 'Pendiente';
+      if (['Completado', 'Resuelto', 'Cerrado'].includes(estadoNormalizado)) estadoNormalizado = 'Completada';
+    }
     const [tarea] = await conn.query('SELECT habitacion_id FROM tareas_mantenimiento WHERE id = ? AND hotel_id = ?', [req.params.id, req.hotel_id]);
     
     if (!tarea.length) {
@@ -89,9 +103,9 @@ router.patch('/:id/estado', async (req, res) => {
     }
     
     let extraFields = '';
-    const params = [estado];
+    const params = [estadoNormalizado];
     
-    if (estado === 'Completada') {
+    if (estadoNormalizado === 'Completada') {
       extraFields = ', fecha_completada = CURDATE()';
       if (costo_real !== undefined) {
         extraFields += ', costo_real = ?';
@@ -103,15 +117,35 @@ router.patch('/:id/estado', async (req, res) => {
     await conn.query(`UPDATE tareas_mantenimiento SET estado = ?${extraFields} WHERE id = ? AND hotel_id = ?`, params);
     
     if (tarea[0]?.habitacion_id) {
-      if (estado === 'EnProceso') {
+      if (estadoNormalizado === 'EnProceso') {
         await conn.query(`UPDATE habitaciones SET estado_mantenimiento = 'EnProceso' WHERE id = ? AND hotel_id = ?`, [tarea[0].habitacion_id, req.hotel_id]);
-      } else if (estado === 'Completada') {
+      } else if (estadoNormalizado === 'Completada') {
         const [pendientes] = await conn.query(
           `SELECT COUNT(*) as count FROM tareas_mantenimiento WHERE habitacion_id = ? AND hotel_id = ? AND estado IN ('Pendiente', 'EnProceso') AND id != ?`,
           [tarea[0].habitacion_id, req.hotel_id, req.params.id]
         );
         if (pendientes[0].count === 0) {
-          await conn.query(`UPDATE habitaciones SET estado_mantenimiento = 'OK' WHERE id = ? AND hotel_id = ?`, [tarea[0].habitacion_id, req.hotel_id]);
+          /*
+            Relacionado con `Check-In-Front/src/pages/Habitaciones.tsx`:
+            - Para que una habitación "aparezca en Disponible", el front usa `estado_habitacion === 'Disponible'`.
+            - Cuando se termina mantenimiento, además de `estado_mantenimiento = 'OK'` debemos liberar la habitación
+              si estaba bloqueada por mantenimiento.
+            Regla de seguridad:
+            - Solo cambiamos `estado_habitacion` si actualmente está en `Bloqueada` (no tocamos `Ocupada/Reservada`).
+          */
+          await conn.query(
+            `UPDATE habitaciones
+             SET
+               estado_mantenimiento = 'OK',
+               estado_habitacion = CASE
+                 WHEN estado_habitacion IS NULL THEN 'Disponible'
+                 WHEN TRIM(estado_habitacion) = '' THEN 'Disponible'
+                 WHEN estado_habitacion = 'Bloqueada' THEN 'Disponible'
+                 ELSE estado_habitacion
+               END
+             WHERE id = ? AND hotel_id = ?`,
+            [tarea[0].habitacion_id, req.hotel_id]
+          );
         }
       }
     }

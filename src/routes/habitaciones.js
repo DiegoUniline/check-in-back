@@ -21,7 +21,22 @@ router.get('/', async (req, res) => {
     
     sql += ' ORDER BY piso, numero';
     const [rows] = await pool.query(sql, params);
-    res.json(rows.map(r => ({ ...r, amenidades: JSON.parse(r.amenidades || '[]') })));
+    res.json(
+      rows.map((r) => ({
+        ...r,
+        /*
+          Normalización defensiva de estados.
+          Relacionado con `Check-In-Front/src/pages/Habitaciones.tsx`:
+          - El front muestra el badge de "Disponible/Ocupada/Reservada/Bloqueada" según `estado_habitacion`.
+          - Si por alguna razón el dato viene NULL/vacío (data legacy o registros inconsistentes), el UI queda en blanco.
+          - Aquí aplicamos defaults sin tocar la BD.
+        */
+        estado_habitacion: (r.estado_habitacion && String(r.estado_habitacion).trim()) ? r.estado_habitacion : 'Disponible',
+        estado_limpieza: (r.estado_limpieza && String(r.estado_limpieza).trim()) ? r.estado_limpieza : 'Limpia',
+        estado_mantenimiento: (r.estado_mantenimiento && String(r.estado_mantenimiento).trim()) ? r.estado_mantenimiento : 'OK',
+        amenidades: JSON.parse(r.amenidades || '[]'),
+      }))
+    );
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -61,6 +76,13 @@ router.get('/:id', async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM v_habitaciones_detalle WHERE id = ? AND hotel_id = ?', [req.params.id, req.hotel_id]);
     if (!rows.length) return res.status(404).json({ error: 'No encontrado' });
+    /*
+      Normalización defensiva de estados.
+      Relacionado con `Check-In-Front/src/pages/Habitaciones.tsx`.
+    */
+    rows[0].estado_habitacion = (rows[0].estado_habitacion && String(rows[0].estado_habitacion).trim()) ? rows[0].estado_habitacion : 'Disponible';
+    rows[0].estado_limpieza = (rows[0].estado_limpieza && String(rows[0].estado_limpieza).trim()) ? rows[0].estado_limpieza : 'Limpia';
+    rows[0].estado_mantenimiento = (rows[0].estado_mantenimiento && String(rows[0].estado_mantenimiento).trim()) ? rows[0].estado_mantenimiento : 'OK';
     rows[0].amenidades = JSON.parse(rows[0].amenidades || '[]');
     res.json(rows[0]);
   } catch (error) {
