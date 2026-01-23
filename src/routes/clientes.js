@@ -24,9 +24,8 @@ const sanitizeApellidoParaNoVip = (apellido, esVip) => {
   if (esVip) return apellido;
   if (apellido === 0) return ''; // caso defensivo: 0 numérico acaba persistiendo como "0" en MySQL (VARCHAR)
   if (typeof apellido !== 'string') return apellido;
-  const trimmed = apellido.trim();
-  if (trimmed.endsWith('0')) return trimmed.slice(0, -1).trim();
-  return trimmed;
+  // Regex para cubrir casos con espacios / caracteres invisibles al final.
+  return apellido.replace(/0[\s\u200B\uFEFF]*$/u, '').trim();
 };
 
 // Helper para obtener cuenta_id del hotel
